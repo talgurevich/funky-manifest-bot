@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Manifestation Bot</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .hidden { display: none; }
+    #qrContainer img, #qrContainer svg { max-width: 100%; height: auto; }
+    #manifestForm { margin-top: 20px; }
+    textarea { width: 100%; height: 100px; }
+  </style>
+</head>
+<body>
+  <h1>Daily Manifestation Bot</h1>
+  <div id="setup">
+    <label for="userIdInput">Enter a unique ID (e.g. your email):</label><br>
+    <input type="text" id="userIdInput" placeholder="user@example.com" />
+    <button id="getQrBtn">Get QR &amp; Scan</button>
+  </div>
+
+  <div id="qrContainer" class="hidden"></div>
+
+  <div id="manifestForm" class="hidden">
+    <h2>Submit Your Manifestations</h2>
+    <p>Enter one manifestation per line:</p>
+    <textarea id="manifestationsInput" placeholder="I will ...\nI attract ..."></textarea><br>
+    <button id="submitManifestBtn">Save Manifestations</button>
+  </div>
+
+  <div id="message"></div>
+
+  <script>
+    const setupDiv = document.getElementById('setup');
+    const qrContainer = document.getElementById('qrContainer');
+    const manifestForm = document.getElementById('manifestForm');
+    const messageDiv = document.getElementById('message');
+
+    document.getElementById('getQrBtn').addEventListener('click', async () => {
+      const userId = document.getElementById('userIdInput').value.trim();
+      if (!userId) {
+        alert('Please enter a valid ID.');
+        return;
+      }
+      messageDiv.textContent = 'Generating QR code...';
+      qrContainer.classList.remove('hidden');
+      qrContainer.innerHTML = '';
+      try {
+        const res = await fetch(`/start/${encodeURIComponent(userId)}`);
+        if (!res.ok) throw new Error('Failed to get QR');
+        const qrSvg = await res.text();
+        qrContainer.innerHTML = qrSvg;
+        messageDiv.textContent = 'Scan this QR with your WhatsApp. After scanning, submit your manifestations below.';
+        manifestForm.classList.remove('hidden');
+      } catch (err) {
+        messageDiv.textContent = 'Error generating QR. Please try again.';
+        console.error(err);
+      }
+    });
+
+    document.getElementById('submitManifestBtn').addEventListener('click', async () => {
+      const userId = document.getElementById('userIdInput').value.trim();
+      const rawText = document.getElementById('manifestationsInput').value.trim();
+      if (!rawText) {
+        alert('Please enter at least one manifestation.');
+        return;
+      }
+      const items = rawText.split('\n').map(line => line.trim()).filter(line => line);
+      messageDiv.textContent = 'Saving manifestations...';
+      try {
+        const res = await fetch('/manifestations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, items })
+        });
+        if (!res.ok) throw new Error('Save failed');
+        messageDiv.textContent = 'Manifestations saved! You will receive daily reminders.';
+      } catch (err) {
+        messageDiv.textContent = 'Error saving manifestations. Please try again.';
+        console.error(err);
+      }
+    });
+  </script>
+</body>
+</html>

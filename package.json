@@ -1,0 +1,18 @@
+{
+  "name": "manifest-bot",
+  "version": "1.0.0",
+  "description": "A WhatsApp-based daily manifestation bot using Baileys and Node.js",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "16.x"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "@adiwajshing/baileys": "^4.9.8",
+    "node-cron": "^3.0.2"
+  }
+}
