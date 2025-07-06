@@ -4,32 +4,103 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Daily Manifestation Bot</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    .hidden { display: none; }
-    #qrContainer img, #qrContainer svg { max-width: 100%; height: auto; }
-    #manifestForm { margin-top: 20px; }
-    textarea { width: 100%; height: 100px; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: #333;
+    }
+    .container {
+      background: #fff;
+      padding: 2rem;
+      border-radius: 1rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+      max-width: 400px;
+      width: 100%;
+    }
+    h1 {
+      margin-bottom: 1rem;
+      font-size: 1.75rem;
+      text-align: center;
+      color: #333;
+    }
+    label {
+      font-weight: 600;
+      display: block;
+      margin-bottom: 0.5rem;
+      color: #555;
+    }
+    input,
+    textarea {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 1rem;
+    }
+    input:focus,
+    textarea:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+    }
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      border: none;
+      border-radius: 0.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      background: #667eea;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background: #5563c1;
+    }
+    #qrContainer {
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    .hidden {
+      display: none;
+    }
+    #message {
+      font-size: 0.9rem;
+      text-align: center;
+      margin-top: 1rem;
+      color: #555;
+    }
   </style>
 </head>
 <body>
-  <h1>Daily Manifestation Bot</h1>
-  <div id="setup">
-    <label for="userIdInput">Enter a unique ID (e.g. your email):</label><br>
-    <input type="text" id="userIdInput" placeholder="user@example.com" />
-    <button id="getQrBtn">Get QR &amp; Scan</button>
+  <div class="container">
+    <h1>Daily Manifestation Bot</h1>
+    <div id="setup">
+      <label for="userIdInput">Your WhatsApp Number</label>
+      <input type="text" id="userIdInput" placeholder="e.g., 972501234567" />
+      <button id="getQrBtn">Get &amp; Scan QR</button>
+    </div>
+
+    <div id="qrContainer" class="hidden"></div>
+
+    <div id="manifestForm" class="hidden">
+      <label for="manifestationsInput">Your Manifestations</label>
+      <textarea id="manifestationsInput" placeholder="I will...\nI attract..."></textarea>
+      <button id="submitManifestBtn">Save &amp; Start</button>
+    </div>
+
+    <div id="message"></div>
   </div>
-
-  <div id="qrContainer" class="hidden"></div>
-
-  <div id="manifestForm" class="hidden">
-    <h2>Submit Your Manifestations</h2>
-    <p>Enter one manifestation per line:</p>
-    <textarea id="manifestationsInput" placeholder="I will ...\nI attract ..."></textarea><br>
-    <button id="submitManifestBtn">Save Manifestations</button>
-  </div>
-
-  <div id="message"></div>
 
   <script>
     const setupDiv = document.getElementById('setup');
@@ -40,7 +111,7 @@
     document.getElementById('getQrBtn').addEventListener('click', async () => {
       const userId = document.getElementById('userIdInput').value.trim();
       if (!userId) {
-        alert('Please enter a valid ID.');
+        alert('Please enter a valid WhatsApp number.');
         return;
       }
       messageDiv.textContent = 'Generating QR code...';
