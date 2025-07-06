@@ -9,46 +9,59 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
-// In-memory map to track active sockets per user
+// Ensure data and session directories exist
+dconst SESSIONS_DIR = path.join(process.cwd(), 'sessions');
+const DATA_DIR = path.join(process.cwd(), 'data');
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// In-memory map for active sockets per user
 const sockets = {};
 
 // Route: initialize or resume a WhatsApp session and return the QR
 app.get('/start/:userId', async (req, res) => {
   const userId = req.params.userId;
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(path.join('sessions', userId));
+    // Prepare user session directory
+    const userDir = path.join(SESSIONS_DIR, userId);
+    if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+
+    const { state, saveCreds } = await useMultiFileAuthState(userDir);
     const sock = makeWASocket({ auth: state, printQRInTerminal: false });
     sockets[userId] = { sock, saveCreds };
 
-    sock.ev.once('connection.update', update => {
-      if (update.qr) {
-        // Send back the QR SVG for scanning
+    let qrSent = false;
+
+    sock.ev.on('connection.update', update => {
+      if (update.qr && !qrSent) {
+        qrSent = true;
         return res.type('svg').send(update.qr);
       }
-      if (update.connection === 'open') {
-        // Auth successful, save credentials
+      if (update.connection === 'open' && !qrSent) {
+        qrSent = true;
         saveCreds();
         return res.send('✅ Session established! Now submit your manifestations.');
       }
-    });
-
-    sock.ev.on('connection.update', update => {
-      const { connection, lastDisconnect } = update;
-      if (connection === 'close') {
-        const code = lastDisconnect.error?.output?.statusCode;
-        if (code !== DisconnectReason.loggedOut) {
-          console.warn(`${userId} disconnected unexpectedly. Reconnecting...`);
-          // Could optionally recreate the socket here
-        } else {
-          // Logged out permanently; clean up
+      if (update.connection === 'close' && !qrSent) {
+        const code = update.lastDisconnect?.error?.output?.statusCode;
+        if (code === DisconnectReason.loggedOut) {
           delete sockets[userId];
-          fs.rmSync(path.join('sessions', userId), { recursive: true, force: true });
+          fs.rmSync(userDir, { recursive: true, force: true });
+          return res.status(400).send('Session logged out. Please restart.');
         }
       }
     });
+
+    // Safety timeout: if no QR/open within 30s, give up
+    setTimeout(() => {
+      if (!qrSent && !res.headersSent) {
+        res.status(504).send('QR generation timed out, please try again.');
+      }
+    }, 30000);
+
   } catch (err) {
     console.error('Error initializing session for', userId, err);
-    res.status(500).send('Failed to initialize WhatsApp session.');
+    if (!res.headersSent) res.status(500).send('Failed to initialize WhatsApp session.');
   }
 });
 
@@ -58,9 +71,8 @@ app.post('/manifestations', (req, res) => {
   if (!userId || !Array.isArray(items)) {
     return res.status(400).send('Invalid payload');
   }
-  const dataDir = path.join('data');
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, `${userId}.json`), JSON.stringify(items, null, 2));
+  const file = path.join(DATA_DIR, `${userId}.json`);
+  fs.writeFileSync(file, JSON.stringify(items, null, 2));
   res.send('Manifestations saved successfully!');
 });
 
