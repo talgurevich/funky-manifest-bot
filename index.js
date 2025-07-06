@@ -1,4 +1,3 @@
-// index.js
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -9,7 +8,7 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
-// Ensure session and data directories
+// Ensure session and data directories exist
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
 const DATA_DIR = path.join(process.cwd(), 'data');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -30,22 +29,24 @@ app.get('/start/:userId', async (req, res) => {
 
     let responded = false;
 
-    // handle first update (QR or open)
-    sock.ev.once('connection.update', update => {
-      if (update.qr && !responded) {
-        responded = true;
-        return res.type('svg').send(update.qr);
-      } else if (update.connection === 'open' && !responded) {
-        responded = true;
-        saveCreds();
-        return res.send('✅ Session established! Now submit your manifestations.');
+    // Listen for connection updates
+    sock.ev.on('connection.update', update => {
+      if (!responded) {
+        if (update.qr) {
+          responded = true;
+          return res.type('svg').send(update.qr);
+        } else if (update.connection === 'open') {
+          responded = true;
+          saveCreds();
+          return res.send('✅ Session established! Now submit your manifestations.');
+        }
       }
     });
 
-    // fallback after 15s
+    // Timeout fallback after 15 seconds
     setTimeout(() => {
       if (!responded && !res.headersSent) {
-        return res.status(504).send('Timeout generating QR; please try again.');
+        res.status(504).send('Timeout generating QR; please try again.');
       }
     }, 15000);
 
