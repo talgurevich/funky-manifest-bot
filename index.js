@@ -3,7 +3,8 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import pkg from '@adiwajshing/baileys';
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = pkg;
+// Baileys v5 exports socket as default
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = pkg;
 
 const app = express();
 app.use(express.json());
