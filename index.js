@@ -2,16 +2,17 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@adiwajshing/baileys';
+import pkg from '@adiwajshing/baileys';
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = pkg;
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
-// In-memory map of sockets to keep sessions alive
+// In-memory map to track active sockets per user
 const sockets = {};
 
-// 1. Start or resume WhatsApp session for a user and emit QR
+// Route: initialize or resume a WhatsApp session and return the QR
 app.get('/start/:userId', async (req, res) => {
   const userId = req.params.userId;
   try {
@@ -21,38 +22,37 @@ app.get('/start/:userId', async (req, res) => {
 
     sock.ev.once('connection.update', update => {
       if (update.qr) {
-        // QR code SVG string
+        // Send back the QR SVG for scanning
         return res.type('svg').send(update.qr);
       }
       if (update.connection === 'open') {
-        // session established
+        // Auth successful, save credentials
         saveCreds();
         return res.send('✅ Session established! Now submit your manifestations.');
       }
     });
 
     sock.ev.on('connection.update', update => {
-      // handle reconnects
       const { connection, lastDisconnect } = update;
       if (connection === 'close') {
         const code = lastDisconnect.error?.output?.statusCode;
         if (code !== DisconnectReason.loggedOut) {
-          console.log(`${userId} disconnected, reconnecting...`);
-          // optionally reconnect
+          console.warn(`${userId} disconnected unexpectedly. Reconnecting...`);
+          // Could optionally recreate the socket here
         } else {
-          // logged out permanently
+          // Logged out permanently; clean up
           delete sockets[userId];
           fs.rmSync(path.join('sessions', userId), { recursive: true, force: true });
         }
       }
     });
   } catch (err) {
-    console.error('Error in /start:', err);
-    res.status(500).send('Failed to initialize session.');
+    console.error('Error initializing session for', userId, err);
+    res.status(500).send('Failed to initialize WhatsApp session.');
   }
 });
 
-// 2. Save manifestations list for user
+// Route: save manifestations for a user
 app.post('/manifestations', (req, res) => {
   const { userId, items } = req.body;
   if (!userId || !Array.isArray(items)) {
@@ -65,4 +65,4 @@ app.post('/manifestations', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`⚡️ Bot listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`⚡️ Manifestation bot listening on port ${PORT}`));
