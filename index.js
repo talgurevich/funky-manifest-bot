@@ -10,7 +10,7 @@ app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Ensure data and session directories exist
-dconst SESSIONS_DIR = path.join(process.cwd(), 'sessions');
+const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
 const DATA_DIR = path.join(process.cwd(), 'data');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
