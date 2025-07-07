@@ -14,7 +14,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      height: 100vh;
+      min-height: 100vh;
       color: #333;
     }
     .container {
@@ -24,18 +24,33 @@
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
       max-width: 400px;
       width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .logo {
+      width: 80px;
+      height: auto;
+      margin-bottom: 1rem;
     }
     h1 {
-      margin-bottom: 1rem;
+      margin: 0;
       font-size: 1.75rem;
       text-align: center;
       color: #333;
     }
+    .description {
+      font-size: 1rem;
+      text-align: center;
+      color: #555;
+      margin: 0.5rem 0 1.5rem;
+      line-height: 1.4;
+    }
     label {
       font-weight: 600;
-      display: block;
-      margin-bottom: 0.5rem;
+      align-self: flex-start;
       color: #555;
+      margin: 0.5rem 0 0.3rem;
     }
     input,
     textarea {
@@ -63,6 +78,7 @@
       background: #667eea;
       cursor: pointer;
       transition: background 0.3s;
+      margin-top: 0.5rem;
     }
     button:hover {
       background: #5563c1;
@@ -70,6 +86,7 @@
     #qrContainer {
       text-align: center;
       margin-bottom: 1rem;
+      width: 100%;
     }
     .hidden {
       display: none;
@@ -79,12 +96,29 @@
       text-align: center;
       margin-top: 1rem;
       color: #555;
+      white-space: pre-wrap;
+    }
+    footer {
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      color: #777;
+      text-align: center;
+    }
+    footer a {
+      color: #667eea;
+      text-decoration: none;
+    }
+    footer a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
 <body>
   <div class="container">
+    <img src="/logo.png" alt="Daily Manifestation Bot Logo" class="logo" />
     <h1>Daily Manifestation Bot</h1>
+    <p class="description">Enter your goals and affirmations, then receive a random manifestation reminder each day to help you take action and stay motivated.</p>
+
     <div id="setup">
       <label for="userIdInput">Your WhatsApp Number</label>
       <input type="text" id="userIdInput" placeholder="e.g., 972501234567" />
@@ -100,10 +134,13 @@
     </div>
 
     <div id="message"></div>
+
+    <footer>
+      created for fun using an AI stack by <a href="https://www.linkedin.com/in/talgurevich/" target="_blank" rel="noopener">Tal G</a>
+    </footer>
   </div>
 
   <script>
-    const setupDiv = document.getElementById('setup');
     const qrContainer = document.getElementById('qrContainer');
     const manifestForm = document.getElementById('manifestForm');
     const messageDiv = document.getElementById('message');
@@ -119,14 +156,16 @@
       qrContainer.innerHTML = '';
       try {
         const res = await fetch(`/start/${encodeURIComponent(userId)}`);
-        if (!res.ok) throw new Error('Failed to get QR');
-        const qrSvg = await res.text();
-        qrContainer.innerHTML = qrSvg;
+        const text = await res.text();
+        if (!res.ok) {
+          throw new Error(`Error ${res.status}: ${text}`);
+        }
+        qrContainer.innerHTML = text;
         messageDiv.textContent = 'Scan this QR with your WhatsApp. After scanning, submit your manifestations below.';
         manifestForm.classList.remove('hidden');
       } catch (err) {
-        messageDiv.textContent = 'Error generating QR. Please try again.';
-        console.error(err);
+        messageDiv.textContent = err.message;
+        console.error('QR Error:', err);
       }
     });
 
@@ -145,11 +184,14 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, items })
         });
-        if (!res.ok) throw new Error('Save failed');
-        messageDiv.textContent = 'Manifestations saved! You will receive daily reminders.';
+        const text = await res.text();
+        if (!res.ok) {
+          throw new Error(`Error ${res.status}: ${text}`);
+        }
+        messageDiv.textContent = text;
       } catch (err) {
-        messageDiv.textContent = 'Error saving manifestations. Please try again.';
-        console.error(err);
+        messageDiv.textContent = err.message;
+        console.error('Save Error:', err);
       }
     });
   </script>
