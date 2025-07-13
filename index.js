@@ -324,6 +324,9 @@ async function initSession(id) {
       if (qr) sock.lastQR = qr;
 
       if (connection === 'open') {
+        console.log(`✅ [${id}] WhatsApp connected successfully`);
+        sock.isConnected = true;
+        
         const jid = `${id}@s.whatsapp.net`;
         await sock.sendMessage(jid, {
           text: `🎉 *Welcome to Manifest Bot!*
@@ -337,6 +340,9 @@ Type /help to see what I can do, or just send me your manifestation naturally!
       }
 
       if (connection === 'close') {
+        console.log(`❌ [${id}] WhatsApp connection closed`);
+        sock.isConnected = false;
+        
         const code = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = code === DisconnectReason.loggedOut;
         delete sockets[id];
@@ -376,6 +382,13 @@ Type /help to see what I can do, or just send me your manifestation naturally!
 // 1) GET /start/:id → return { qr, linked }
 app.get('/start/:id', async (req, res) => {
   try {
+    const sock = sockets[req.params.id];
+    
+    // Check if socket exists and is connected
+    if (sock && (sock.isConnected || sock.user)) {
+      return res.json({ linked: true });
+    }
+    
     const qr = await initSession(req.params.id);
     if (!qr) {
       return res.json({ linked: true });
@@ -386,6 +399,7 @@ app.get('/start/:id', async (req, res) => {
     if (e.message.includes('Timed out')) {
       return res.json({ linked: true });
     }
+    console.error(`Error in /start/${req.params.id}:`, e);
     res.status(500).json({ error: e.message });
   }
 });
