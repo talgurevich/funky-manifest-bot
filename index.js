@@ -79,9 +79,12 @@ async function processMessages(sock, id, messages, eventType) {
       remoteJid: msg.key?.remoteJid
     });
     
-    // IMPORTANT: Only process messages that are NOT from the bot itself
-    // We want to respond to the owner, but not to our own responses
-    if (msg.message && !msg.key?.fromMe) {
+    // For self-bots: Process messages TO yourself (not from groups, not to others)
+    // The remoteJid should match the bot's own number
+    const targetJid = `${id}@s.whatsapp.net`;
+    const isToSelf = msg.key?.remoteJid === targetJid;
+    
+    if (msg.message && isToSelf) {
       // Mark message as processed
       if (messageId) {
         processedMessages.add(messageId);
@@ -95,7 +98,6 @@ async function processMessages(sock, id, messages, eventType) {
       // Extract text from different message types
       let text = '';
       
-      // Check all possible text locations
       if (msg.message.conversation) {
         text = msg.message.conversation;
       } else if (msg.message.extendedTextMessage?.text) {
@@ -113,19 +115,29 @@ async function processMessages(sock, id, messages, eventType) {
       }
       
       console.log(`🔍 [${id}] Extracted text: "${text}"`);
+      console.log(`🎯 [${id}] Message to self detected: ${isToSelf}`);
       
       if (text && text.trim().length > 0) {
-        console.log(`📩 [${id}] Processing incoming message: "${text}" from ${msg.key?.remoteJid}`);
+        console.log(`📩 [${id}] Processing self-message: "${text}"`);
         
-        handleIncomingMessage(sock, {
-          remoteJid: msg.key.remoteJid,
-          body: text
-        });
+        // Check if this is a bot response (contains bot-specific phrases)
+        const botResponseKeywords = ['Welcome to Manifest Bot', 'Commands:', 'Manifestation added', 'Your Stats:'];
+        const isBotResponse = botResponseKeywords.some(keyword => text.includes(keyword));
+        
+        if (!isBotResponse) {
+          console.log(`🤖 [${id}] Processing user command: "${text}"`);
+          handleIncomingMessage(sock, {
+            remoteJid: targetJid,
+            body: text
+          });
+        } else {
+          console.log(`🔄 [${id}] Skipping bot response to prevent loop`);
+        }
       } else {
         console.log(`⚠️ [${id}] No text found in message`);
       }
     } else {
-      console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key?.fromMe}, hasMessage=${!!msg.message}`);
+      console.log(`⏭️ [${id}] Skipping message: toSelf=${isToSelf}, hasMessage=${!!msg.message}, remoteJid=${msg.key?.remoteJid}`);
     }
   }
 }
