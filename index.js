@@ -1,4 +1,4 @@
-// index.js
+// Enhanced index.js with interactive commands and better functionality
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
@@ -19,17 +19,267 @@ const SESSIONS_DIR = path.join(__dirname, 'sessions');
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 const sockets = {};
 
-// --- manifestation store ---
-const STORE_FILE = path.join(SESSIONS_DIR, 'manifestations.json');
-let manifestations = {};
+// --- enhanced data store ---
+const STORE_FILE = path.join(SESSIONS_DIR, 'userdata.json');
+let userData = {};
 try {
-  manifestations = JSON.parse(fs.readFileSync(STORE_FILE, 'utf-8'));
+  userData = JSON.parse(fs.readFileSync(STORE_FILE, 'utf-8'));
 } catch {}
+
 function saveStore() {
-  fs.writeFileSync(STORE_FILE, JSON.stringify(manifestations, null, 2));
+  fs.writeFileSync(STORE_FILE, JSON.stringify(userData, null, 2));
 }
 
-// --- initialize (or re-init) a WhatsApp session ---
+// Initialize user data structure
+function initUserData(id) {
+  if (!userData[id]) {
+    userData[id] = {
+      manifestations: [],
+      settings: {
+        enabled: true,
+        time: '09:00',
+        timezone: 'UTC',
+        frequency: 'daily' // daily, weekly, custom
+      },
+      stats: {
+        joined: new Date().toISOString(),
+        totalSent: 0,
+        lastSent: null
+      }
+    };
+    saveStore();
+  }
+}
+
+// --- message handling ---
+function handleIncomingMessage(sock, message) {
+  const { remoteJid, body } = message;
+  if (!body || !remoteJid.endsWith('@s.whatsapp.net')) return;
+
+  const userId = remoteJid.split('@')[0];
+  const text = body.toLowerCase().trim();
+
+  // Initialize user if not exists
+  initUserData(userId);
+
+  // Command routing
+  if (text.startsWith('/')) {
+    handleCommand(sock, userId, text, remoteJid);
+  } else {
+    // Handle natural language interactions
+    handleNaturalMessage(sock, userId, text, remoteJid);
+  }
+}
+
+async function handleCommand(sock, userId, command, jid) {
+  const user = userData[userId];
+  
+  try {
+    switch (command.split(' ')[0]) {
+      case '/start':
+      case '/help':
+        await sock.sendMessage(jid, {
+          text: `🌟 *Welcome to Manifest Bot!*
+
+*Commands:*
+📝 /add - Add a new manifestation
+📋 /list - View your manifestations
+✏️ /edit [number] - Edit a manifestation
+🗑️ /delete [number] - Delete a manifestation
+⏰ /time [HH:MM] - Set delivery time
+🔔 /frequency [daily/weekly] - Set frequency
+📊 /stats - View your stats
+⏸️ /pause - Pause daily messages
+▶️ /resume - Resume daily messages
+❓ /help - Show this help
+
+*Examples:*
+/add I am successful and confident
+/time 08:30
+/frequency weekly
+
+You can also just type your manifestation naturally!`
+        });
+        break;
+
+      case '/add':
+        const manifestText = command.substring(4).trim();
+        if (!manifestText) {
+          await sock.sendMessage(jid, { 
+            text: '📝 Please provide your manifestation after /add\n\nExample: /add I am successful and confident' 
+          });
+          return;
+        }
+        user.manifestations.push(manifestText);
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: `✅ Manifestation added!\n\n"${manifestText}"\n\nYou now have ${user.manifestations.length} manifestation(s).` 
+        });
+        break;
+
+      case '/list':
+        if (user.manifestations.length === 0) {
+          await sock.sendMessage(jid, { text: '📝 You have no manifestations yet. Use /add to create one!' });
+          return;
+        }
+        let list = '📋 *Your Manifestations:*\n\n';
+        user.manifestations.forEach((m, i) => {
+          list += `${i + 1}. "${m}"\n\n`;
+        });
+        await sock.sendMessage(jid, { text: list });
+        break;
+
+      case '/edit':
+        const editArgs = command.split(' ');
+        const editIndex = parseInt(editArgs[1]) - 1;
+        const newText = editArgs.slice(2).join(' ');
+        
+        if (isNaN(editIndex) || editIndex < 0 || editIndex >= user.manifestations.length) {
+          await sock.sendMessage(jid, { 
+            text: '❌ Invalid manifestation number. Use /list to see your manifestations.' 
+          });
+          return;
+        }
+        
+        if (!newText) {
+          await sock.sendMessage(jid, { 
+            text: `📝 Current manifestation ${editIndex + 1}:\n"${user.manifestations[editIndex]}"\n\nProvide new text: /edit ${editIndex + 1} [new text]` 
+          });
+          return;
+        }
+        
+        const oldText = user.manifestations[editIndex];
+        user.manifestations[editIndex] = newText;
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: `✅ Manifestation updated!\n\nOld: "${oldText}"\nNew: "${newText}"` 
+        });
+        break;
+
+      case '/delete':
+        const deleteIndex = parseInt(command.split(' ')[1]) - 1;
+        if (isNaN(deleteIndex) || deleteIndex < 0 || deleteIndex >= user.manifestations.length) {
+          await sock.sendMessage(jid, { 
+            text: '❌ Invalid manifestation number. Use /list to see your manifestations.' 
+          });
+          return;
+        }
+        
+        const deletedText = user.manifestations.splice(deleteIndex, 1)[0];
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: `🗑️ Manifestation deleted:\n"${deletedText}"\n\nYou now have ${user.manifestations.length} manifestation(s).` 
+        });
+        break;
+
+      case '/time':
+        const timeArg = command.split(' ')[1];
+        if (!timeArg || !/^\d{2}:\d{2}$/.test(timeArg)) {
+          await sock.sendMessage(jid, { 
+            text: `⏰ Current delivery time: ${user.settings.time}\n\nTo change: /time HH:MM\nExample: /time 08:30` 
+          });
+          return;
+        }
+        
+        user.settings.time = timeArg;
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: `⏰ Delivery time updated to ${timeArg}!\n\n⚠️ Note: Currently uses server timezone. Timezone support coming soon!` 
+        });
+        break;
+
+      case '/frequency':
+        const freq = command.split(' ')[1];
+        if (!freq || !['daily', 'weekly'].includes(freq)) {
+          await sock.sendMessage(jid, { 
+            text: `🔔 Current frequency: ${user.settings.frequency}\n\nOptions: daily, weekly\nExample: /frequency weekly` 
+          });
+          return;
+        }
+        
+        user.settings.frequency = freq;
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: `🔔 Frequency updated to ${freq}!` 
+        });
+        break;
+
+      case '/stats':
+        const stats = user.stats;
+        const joinedDate = new Date(stats.joined).toLocaleDateString();
+        const lastSentDate = stats.lastSent ? new Date(stats.lastSent).toLocaleDateString() : 'Never';
+        
+        await sock.sendMessage(jid, { 
+          text: `📊 *Your Stats:*
+
+📅 Joined: ${joinedDate}
+📨 Total messages sent: ${stats.totalSent}
+📬 Last sent: ${lastSentDate}
+📝 Manifestations: ${user.manifestations.length}
+⏰ Delivery time: ${user.settings.time}
+🔔 Frequency: ${user.settings.frequency}
+▶️ Status: ${user.settings.enabled ? 'Active' : 'Paused'}` 
+        });
+        break;
+
+      case '/pause':
+        user.settings.enabled = false;
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: '⏸️ Daily manifestations paused. Use /resume to restart.' 
+        });
+        break;
+
+      case '/resume':
+        user.settings.enabled = true;
+        saveStore();
+        await sock.sendMessage(jid, { 
+          text: '▶️ Daily manifestations resumed!' 
+        });
+        break;
+
+      default:
+        await sock.sendMessage(jid, { 
+          text: '❓ Unknown command. Type /help for available commands.' 
+        });
+    }
+  } catch (error) {
+    console.error(`Error handling command ${command}:`, error);
+    await sock.sendMessage(jid, { 
+      text: '❌ An error occurred processing your command. Please try again.' 
+    });
+  }
+}
+
+async function handleNaturalMessage(sock, userId, text, jid) {
+  const user = userData[userId];
+  
+  // Auto-detect manifestation-like messages
+  const manifestationKeywords = ['i am', 'i will', 'i manifest', 'i attract', 'i deserve', 'i have'];
+  const isManifestationLike = manifestationKeywords.some(keyword => text.includes(keyword));
+  
+  if (isManifestationLike) {
+    user.manifestations.push(text);
+    saveStore();
+    await sock.sendMessage(jid, { 
+      text: `✨ I detected a manifestation! Added:\n\n"${text}"\n\nYou now have ${user.manifestations.length} manifestation(s). Type /help for more options.` 
+    });
+  } else {
+    // General helpful response
+    await sock.sendMessage(jid, { 
+      text: `Hi! I'm your manifestation bot. 🌟
+
+You can:
+• Type your manifestation naturally (e.g., "I am successful")
+• Use /add to add a manifestation
+• Use /help to see all commands
+
+What would you like to manifest today?` 
+    });
+  }
+}
+
+// --- enhanced session initialization ---
 async function initSession(id) {
   const folder = path.join(SESSIONS_DIR, id);
   fs.mkdirSync(folder, { recursive: true });
@@ -38,50 +288,72 @@ async function initSession(id) {
   let sock = sockets[id];
 
   if (!sock) {
-    sock = makeWASocket({ auth: state });
+    sock = makeWASocket({ 
+      auth: state,
+      printQRInTerminal: false
+    });
     sockets[id] = sock;
+
+    // Initialize user data
+    initUserData(id);
 
     // persist credentials
     sock.ev.on('creds.update', saveCreds);
+
+    // listen for incoming messages
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type === 'notify') {
+        for (const msg of messages) {
+          if (!msg.key.fromMe && msg.message) {
+            const text = msg.message.conversation || 
+                        msg.message.extendedTextMessage?.text || '';
+            
+            handleIncomingMessage(sock, {
+              remoteJid: msg.key.remoteJid,
+              body: text
+            });
+          }
+        }
+      }
+    });
 
     // listen for connection updates
     sock.ev.on('connection.update', async update => {
       const { qr, connection, lastDisconnect } = update;
 
-      // cache latest QR
       if (qr) sock.lastQR = qr;
 
-      // once paired → send welcome message
       if (connection === 'open') {
         const jid = `${id}@s.whatsapp.net`;
         await sock.sendMessage(jid, {
-          text: '✅ Your number is now registered! Your manifestation has been saved.'
+          text: `🎉 *Welcome to Manifest Bot!*
+
+Your number is now connected! I'll send you daily manifestations and you can interact with me anytime.
+
+Type /help to see what I can do, or just send me your manifestation naturally!
+
+✨ Ready to manifest your dreams! ✨`
         });
       }
 
-      // on close → clean up / reconnect
       if (connection === 'close') {
-        const code     = lastDisconnect?.error?.output?.statusCode;
+        const code = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = code === DisconnectReason.loggedOut;
         delete sockets[id];
 
         if (loggedOut) {
-          // force re-scan next time
           fs.rmSync(folder, { recursive: true, force: true });
         } else {
-          // transient error → restart session
           await initSession(id);
         }
       }
     });
   }
 
-  // if we already have a QR, return it immediately
   if (sock.lastQR) {
     return sock.lastQR;
   }
 
-  // otherwise wait up to 30s for the first QR event
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       sock.ev.off('connection.update', onUpdate);
@@ -99,20 +371,18 @@ async function initSession(id) {
   });
 }
 
-// --- REST endpoints ---
+// --- enhanced REST endpoints ---
 
 // 1) GET /start/:id → return { qr, linked }
 app.get('/start/:id', async (req, res) => {
   try {
     const qr = await initSession(req.params.id);
     if (!qr) {
-      // already linked
       return res.json({ linked: true });
     }
     const dataUrl = await qrcode.toDataURL(qr);
     res.json({ qr: dataUrl, linked: false });
   } catch (e) {
-    // if we simply timed out waiting for a QR, treat as “already linked”
     if (e.message.includes('Timed out')) {
       return res.json({ linked: true });
     }
@@ -120,13 +390,33 @@ app.get('/start/:id', async (req, res) => {
   }
 });
 
-// 2) POST /manifestations → save a user’s text
+// 2) POST /manifestations → save a user's text (legacy endpoint)
 app.post('/manifestations', (req, res) => {
   const { id, text } = req.body;
   if (!id || !text) {
     return res.status(400).json({ error: 'id and text required' });
   }
-  manifestations[id] = text;
+  
+  initUserData(id);
+  userData[id].manifestations.push(text);
+  saveStore();
+  res.json({ success: true });
+});
+
+// 3) GET /user/:id → get user data
+app.get('/user/:id', (req, res) => {
+  const id = req.params.id;
+  initUserData(id);
+  res.json(userData[id]);
+});
+
+// 4) POST /user/:id/settings → update user settings
+app.post('/user/:id/settings', (req, res) => {
+  const id = req.params.id;
+  const settings = req.body;
+  
+  initUserData(id);
+  Object.assign(userData[id].settings, settings);
   saveStore();
   res.json({ success: true });
 });
@@ -139,26 +429,93 @@ app.get('*', (req, res) => {
 // start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`⚡️ Bot listening on port ${PORT}`);
+  console.log(`⚡️ Enhanced Manifest Bot listening on port ${PORT}`);
 });
 
-// --- daily cron job at 09:00 server time ---
-cron.schedule('0 9 * * *', async () => {
-  console.log('🔔 Sending daily manifestations…');
-  for (const id of Object.keys(manifestations)) {
-    const sock = sockets[id];
-    if (!sock) {
-      console.log(` • [${id}] no active socket, skipping`);
+// --- enhanced daily cron job ---
+cron.schedule('0 * * * *', async () => { // Run every hour to check custom times
+  const currentTime = new Date();
+  const currentHour = currentTime.getHours().toString().padStart(2, '0');
+  const currentMinute = currentTime.getMinutes().toString().padStart(2, '0');
+  const currentTimeString = `${currentHour}:${currentMinute}`;
+  
+  console.log(`🔔 Checking for scheduled manifestations at ${currentTimeString}...`);
+  
+  for (const id of Object.keys(userData)) {
+    const user = userData[id];
+    
+    // Skip if disabled or no manifestations
+    if (!user.settings.enabled || user.manifestations.length === 0) {
       continue;
     }
+    
+    // Check if it's time to send
+    const shouldSend = user.settings.time === currentTimeString;
+    
+    // For weekly frequency, also check if it's the right day
+    if (user.settings.frequency === 'weekly' && shouldSend) {
+      const dayOfWeek = currentTime.getDay();
+      if (dayOfWeek !== 1) { // Only Monday for weekly
+        continue;
+      }
+    }
+    
+    if (!shouldSend) continue;
+    
+    const sock = sockets[id];
+    if (!sock) {
+      console.log(`  • [${id}] no active socket, skipping`);
+      continue;
+    }
+    
     const jid = `${id}@s.whatsapp.net`;
     try {
+      // Pick a random manifestation if multiple exist
+      const randomIndex = Math.floor(Math.random() * user.manifestations.length);
+      const manifestation = user.manifestations[randomIndex];
+      
       await sock.sendMessage(jid, {
-        text: `📅 Here’s your daily manifestation:\n\n"${manifestations[id]}"`
+        text: `✨ *Daily Manifestation* ✨
+
+"${manifestation}"
+
+🌟 Believe it, feel it, manifest it! 🌟
+
+Type /help for more options or /pause to stop daily messages.`
       });
-      console.log(` • [${id}] sent`);
+      
+      // Update stats
+      user.stats.totalSent++;
+      user.stats.lastSent = new Date().toISOString();
+      saveStore();
+      
+      console.log(`  • [${id}] sent manifestation: "${manifestation}"`);
     } catch (err) {
-      console.error(` • [${id}] failed: ${err.message}`);
+      console.error(`  • [${id}] failed: ${err.message}`);
     }
   }
+});
+
+// --- cleanup inactive sessions (daily at 2 AM) ---
+cron.schedule('0 2 * * *', () => {
+  console.log('🧹 Cleaning up inactive sessions...');
+  
+  const activeSockets = Object.keys(sockets);
+  const userDataKeys = Object.keys(userData);
+  
+  // Remove user data for users without active sockets (after 30 days)
+  userDataKeys.forEach(id => {
+    if (!activeSockets.includes(id)) {
+      const user = userData[id];
+      const joinedDate = new Date(user.stats.joined);
+      const daysSinceJoined = (Date.now() - joinedDate.getTime()) / (1000 * 60 * 60 * 24);
+      
+      if (daysSinceJoined > 30) {
+        delete userData[id];
+        console.log(`  • Removed inactive user: ${id}`);
+      }
+    }
+  });
+  
+  saveStore();
 });
