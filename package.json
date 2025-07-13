@@ -2,6 +2,7 @@
   "name": "manifest-bot",
   "version": "1.0.0",
   "description": "A WhatsApp-based daily manifestation bot using Baileys and Node.js",
+  "type": "module",                    // ← add this
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

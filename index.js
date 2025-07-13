@@ -1,92 +1,79 @@
 // index.js
-import express from 'express';
-import path from 'path';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
-import QRCode from 'qrcode';
+import { webcrypto } from 'crypto'
+globalThis.crypto ??= webcrypto
 
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(process.cwd(), 'public')));
+import express from 'express'
+import path from 'path'
+import { makeWASocket, DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys'
+import qrcode from 'qrcode'
 
-const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
-const sessions = {}; // { [userId]: { sock, res? } }
+const app = express()
+app.use(express.json())
+// serve your front-end assets
+app.use(express.static(path.join(process.cwd(), 'public')))
 
-async function initSession(userId) {
-  // prepare auth folder
-  const authPath = path.join(SESSIONS_DIR, userId);
-  const { state, saveCreds } = await useMultiFileAuthState(authPath);
+const PORT = process.env.PORT || 3000
+// in-memory map so you can broadcast QR → front-end via SSE/WebSocket/etc.
+const qrStore = {}
 
-  // create socket
-  const sock = makeWASocket({ auth: state });
-  sessions[userId].sock = sock;
+async function initSession(id) {
+  const dir = path.join(process.cwd(), 'sessions', id)
+  const { state, saveCreds } = await useMultiFileAuthState(dir)
 
-  // save credential updates
-  sock.ev.on('creds.update', saveCreds);
+  const sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false
+  })
 
+  // expose QR for your front-end to fetch
   sock.ev.on('connection.update', async (update) => {
-    const { connection, qr, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update
 
-    // 1) send the QR data-URL back
-    if (qr && sessions[userId].res) {
-      try {
-        const qrUrl = await QRCode.toDataURL(qr);
-        sessions[userId].res.json({ qr: qrUrl });
-      } catch (e) {
-        sessions[userId].res.status(500).json({ error: 'Failed to generate QR' });
-      }
-      delete sessions[userId].res;
+    if (qr) {
+      // generate a data-URL so you can inject directly into <img src="...">
+      qrStore[id] = await qrcode.toDataURL(qr, { margin: 2 })
     }
 
-    // 2) once open, send default welcome
     if (connection === 'open') {
-      const jid = `${userId}@s.whatsapp.net`;
-      await sock.sendMessage(jid, {
-        text: '👋 Welcome! Your WhatsApp is now linked to the Manifestation Bot.'
-      });
+      // send your welcome message
+      await sock.sendMessage(
+        /* your manifest number JID */ `${id}@s.whatsapp.net`,
+        { text: 'Your manifestation has been registered' }
+      )
     }
 
-    // 3) on close (unless logged out), reconnect
     if (connection === 'close') {
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) {
-        console.log(`Reconnecting session ${userId} (code ${code})`);
-        initSession(userId);
+      const code = (lastDisconnect?.error)?.output?.statusCode
+      const loggedOut = code === DisconnectReason.loggedOut
+      if (!loggedOut) {
+        console.log(`reconnecting session ${id}…`)
+        initSession(id)
       }
     }
-  });
+  })
+
+  sock.ev.on('creds.update', saveCreds)
+  return sock
 }
 
-// endpoint to start & get QR
-app.get('/start/:userId', async (req, res) => {
-  const { userId } = req.params;
-  sessions[userId] = { res };
+// start/refresh a session
+app.get('/start/:id', async (req, res) => {
   try {
-    await initSession(userId);
-  } catch (err) {
-    console.error('Init session error', err);
-    res.status(500).json({ error: 'Session init failed' });
+    await initSession(req.params.id)
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('Init session error', e)
+    res.status(500).json({ error: e.message })
   }
-});
+})
 
-// endpoint to send a manifestation and confirmation
-app.post('/manifestations', async (req, res) => {
-  const { id, message } = req.body;
-  const entry = sessions[id];
-  if (!entry?.sock) {
-    return res.status(400).json({ error: 'Session not started' });
-  }
-  const sock = entry.sock;
-  const jid = `${id}@s.whatsapp.net`;
+// fetch the QR data-URL
+app.get('/qr/:id', (req, res) => {
+  const d = qrStore[req.params.id]
+  if (!d) return res.status(404).send('no QR yet')
+  res.type('application/json').send({ qrDataUrl: d })
+})
 
-  try {
-    await sock.sendMessage(jid, { text: message });
-    await sock.sendMessage(jid, { text: '✅ Your manifestation has been registered!' });
-    res.json({ status: 'ok' });
-  } catch (err) {
-    console.error('Send message error', err);
-    res.status(500).json({ error: 'Failed to send message' });
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`⚡️ Bot listening on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`⚡️ Bot listening on port ${PORT}`)
+})
