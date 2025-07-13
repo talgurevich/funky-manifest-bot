@@ -5,6 +5,7 @@ if (!globalThis.crypto) globalThis.crypto = webcrypto;
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import QRCode from 'qrcode';
 import pkg from '@whiskeysockets/baileys';
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = pkg;
 
@@ -14,9 +15,9 @@ app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Directories for session credentials and user data
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR     = path.join(process.cwd(), 'data');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(DATA_DIR))     fs.mkdirSync(DATA_DIR,     { recursive: true });
 
 const sockets = {};
 
@@ -34,11 +35,13 @@ app.get('/start/:userId', async (req, res) => {
     sockets[userId] = sock;
 
     let responded = false;
-    sock.ev.on('connection.update', update => {
+    sock.ev.on('connection.update', async update => {
       console.log('connection.update →', update);
       if (!responded && update.qr) {
         responded = true;
-        const svgBase64 = Buffer.from(update.qr).toString('base64');
+        // Generate SVG with qr data
+        const svgString = await QRCode.toString(update.qr, { type: 'svg', width: 300 });
+        const svgBase64 = Buffer.from(svgString).toString('base64');
         return res.json({ qr: svgBase64 });
       }
       if (!responded && update.connection === 'open') {
@@ -47,11 +50,12 @@ app.get('/start/:userId', async (req, res) => {
       }
       if (update.connection === 'close') {
         const code = update.lastDisconnect?.error?.output?.statusCode;
-        if (code !== DisconnectReason.loggedOut) connectUser(userId);
+        if (code !== DisconnectReason.loggedOut) await connectUser(userId);
         else fs.rmSync(userDir, { recursive: true, force: true });
       }
     });
 
+    // Fallback timeout
     setTimeout(() => {
       if (!responded && !res.headersSent) res.status(504).json({ error: 'Timeout generating QR; please try again.' });
     }, 15000);
@@ -74,9 +78,7 @@ async function connectUser(userId) {
 // Save manifestation list
 app.post('/manifestations', (req, res) => {
   const { userId, items } = req.body;
-  if (!userId || !Array.isArray(items)) {
-    return res.status(400).json({ error: 'Invalid payload' });
-  }
+  if (!userId || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid payload' });
   fs.writeFileSync(path.join(DATA_DIR, `${userId}.json`), JSON.stringify(items, null, 2));
   return res.json({ success: true });
 });
