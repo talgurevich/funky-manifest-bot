@@ -140,6 +140,9 @@ async function handleCommand(sock, userId, command, jid) {
   const user = userData[userId];
   
   console.log(`🎯 [${userId}] Executing command: ${command}`);
+  console.log(`📍 [${userId}] Target JID for response: ${jid}`);
+  console.log(`🔍 [${userId}] User ID extracted: ${userId}`);
+  console.log(`🔍 [${userId}] Original JID: ${jid}`);
   
   try {
     const commandName = command.split(' ')[0];
@@ -148,7 +151,7 @@ async function handleCommand(sock, userId, command, jid) {
     switch (commandName) {
       case '/start':
       case '/help':
-        console.log(`📋 [${userId}] Sending help message`);
+        console.log(`📋 [${userId}] Sending help message to: ${jid}`);
         await sock.sendMessage(jid, {
           text: `🌟 *Welcome to Manifest Bot!*
 
@@ -171,7 +174,7 @@ async function handleCommand(sock, userId, command, jid) {
 
 You can also just type your manifestation naturally!`
         });
-        console.log(`✅ [${userId}] Help message sent successfully`);
+        console.log(`✅ [${userId}] Help message sent successfully to: ${jid}`);
         break;
 
       case '/add':
@@ -480,11 +483,15 @@ async function initSession(id) {
         if (connection === 'open') {
           console.log(`✅ [${id}] WhatsApp connected successfully`);
           console.log(`👤 [${id}] User info:`, sock.user);
+          console.log(`📱 [${id}] Expected target JID: ${id}@s.whatsapp.net`);
+          console.log(`🔍 [${id}] Socket user JID: ${sock.user?.id}`);
           sock.isConnected = true;
           
-          const jid = `${id}@s.whatsapp.net`;
+          const targetJid = `${id}@s.whatsapp.net`;
+          console.log(`📤 [${id}] Attempting to send welcome message to: ${targetJid}`);
+          
           try {
-            await sock.sendMessage(jid, {
+            await sock.sendMessage(targetJid, {
               text: `🎉 *Welcome to Manifest Bot!*
 
 Your number is now connected! I'll send you daily manifestations and you can interact with me anytime.
@@ -493,9 +500,9 @@ Type /help to see what I can do, or just send me your manifestation naturally!
 
 ✨ Ready to manifest your dreams! ✨`
             });
-            console.log(`📨 [${id}] Welcome message sent`);
+            console.log(`📨 [${id}] Welcome message sent successfully to ${targetJid}`);
           } catch (error) {
-            console.error(`❌ [${id}] Failed to send welcome message:`, error);
+            console.error(`❌ [${id}] Failed to send welcome message to ${targetJid}:`, error);
           }
         }
 
@@ -557,7 +564,8 @@ Type /help to see what I can do, or just send me your manifestation naturally!
 // 1) GET /start/:id → return { qr, linked }
 app.get('/start/:id', async (req, res) => {
   const id = req.params.id;
-  console.log(`🔄 [${id}] Starting session...`);
+  console.log(`🔄 [${id}] Starting session for phone number: ${id}`);
+  console.log(`📞 [${id}] Raw ID from URL params: "${req.params.id}"`);
   
   try {
     const sock = sockets[id];
@@ -630,17 +638,25 @@ app.post('/test/:id', async (req, res) => {
   const id = req.params.id;
   const { message } = req.body;
   
+  console.log(`🧪 [${id}] Test message request for phone: ${id}`);
+  console.log(`📞 [${id}] Raw ID from params: "${req.params.id}"`);
+  
   const sock = sockets[id];
   if (!sock) {
+    console.log(`❌ [${id}] No active session found`);
     return res.status(404).json({ error: 'No active session' });
   }
   
   try {
-    const jid = `${id}@s.whatsapp.net`;
-    await sock.sendMessage(jid, { text: message || 'Test message from bot!' });
-    res.json({ success: true });
+    const targetJid = `${id}@s.whatsapp.net`;
+    console.log(`📤 [${id}] Sending test message to: ${targetJid}`);
+    console.log(`📝 [${id}] Message content: "${message || 'Test message from bot!'}"`);
+    
+    await sock.sendMessage(targetJid, { text: message || 'Test message from bot!' });
+    console.log(`✅ [${id}] Test message sent successfully to: ${targetJid}`);
+    res.json({ success: true, target: targetJid });
   } catch (error) {
-    console.error(`Test message error:`, error);
+    console.error(`❌ [${id}] Test message error:`, error);
     res.status(500).json({ error: error.message });
   }
 });

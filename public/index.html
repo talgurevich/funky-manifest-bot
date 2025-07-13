@@ -539,13 +539,22 @@
       const cleanNumber = phoneNumber.replace(/\D/g, '').replace(/^0+/, '');
       currentUserId = countryCode.substring(1) + cleanNumber;
       
+      console.log('🔍 Phone number processing:');
+      console.log('- Country code:', countryCode);
+      console.log('- Raw phone number:', phoneNumber);
+      console.log('- Clean number:', cleanNumber);
+      console.log('- Final user ID:', currentUserId);
+      
       // Show loading
       document.getElementById('phone-btn-text').textContent = 'Connecting...';
       document.getElementById('phone-loading').classList.remove('hidden');
       
       try {
+        console.log('📞 Making request to /start/' + currentUserId);
         const response = await fetch(`/start/${currentUserId}`);
         const data = await response.json();
+        
+        console.log('📨 Response from server:', data);
         
         if (data.linked) {
           // Already connected, skip to manifestation
@@ -562,7 +571,7 @@
           pollConnection();
         }
       } catch (error) {
-        console.error('Error:', error);
+        console.error('❌ Error:', error);
         alert('Error connecting. Please try again.');
       } finally {
         document.getElementById('phone-btn-text').textContent = 'Continue';
