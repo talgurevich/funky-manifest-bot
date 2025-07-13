@@ -3,8 +3,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import qrcode from 'qrcode';
-import {
-  default as makeWASocket,
+import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState
 } from '@whiskeysockets/baileys';
@@ -16,14 +15,17 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory stores for sockets and QR data URLs
+// In-memory stores for sockets and QR Data-URLs
 const sockets = {};
 const qrStore = {};
 
-// Initialize a WhatsApp session for a given numeric ID
+/**
+ * Spin up a WhatsApp session for a given numeric ID
+ */
 async function initSession(id) {
   const jid = id.includes('@') ? id : `${id}@s.whatsapp.net`;
-  const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'sessions', id));
+  const authDir = path.join(__dirname, 'sessions', id);
+  const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
   const sock = makeWASocket({ auth: state });
   sockets[id] = sock;
@@ -31,43 +33,47 @@ async function initSession(id) {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // When a QR is generated, turn it into a Data-URL and cache it
+    // QR arrived → convert to Data-URL
     if (qr) {
       try {
         qrStore[id] = await qrcode.toDataURL(qr);
-      } catch (err) {
-        console.error('Failed to generate QR DataURL', err);
+      } catch (e) {
+        console.error('QR → DataURL error', e);
       }
     }
 
-    // Once fully connected, send our two welcome/confirmation messages
+    // Once fully open, send two confirmation messages
     if (connection === 'open') {
       try {
-        await sock.sendMessage(jid, { text: `✅ Your number ${id} has been successfully linked!` });
-        await sock.sendMessage(jid, { text: `✅ Your manifestation has been registered!` });
-      } catch (err) {
-        console.error('Error sending confirmation messages', err);
+        await sock.sendMessage(jid, {
+          text: `✅ Your number *${id}* has been successfully linked!`
+        });
+        await sock.sendMessage(jid, {
+          text: `✅ Your manifestation has been registered!`
+        });
+      } catch (e) {
+        console.error('Error sending post-link messages', e);
       }
     }
 
-    // If the connection closes unexpectedly, reconnect (unless logged out)
+    // If closed (and not logged out) → reconnect
     if (connection === 'close') {
-      const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log(`Connection closed for ${id}. Reconnect?`, shouldReconnect);
-      if (shouldReconnect) {
-        initSession(id);
-      } else {
+      const shouldReconnect =
+        (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log(`Connection for ${id} closed. Reconnect?`, shouldReconnect);
+      if (shouldReconnect) initSession(id);
+      else {
         delete sockets[id];
         delete qrStore[id];
       }
     }
   });
 
-  // Persist credentials any time they update
+  // Persist credentials on every update
   sock.ev.on('creds.update', saveCreds);
 }
 
-// HTTP endpoint to start/link a session
+// HTTP: start/link a session
 app.get('/start/:id', async (req, res) => {
   const { id } = req.params;
   if (!sockets[id]) {
@@ -82,16 +88,20 @@ app.get('/start/:id', async (req, res) => {
   return res.json({ message: `Session for ${id} is already running` });
 });
 
-// HTTP endpoint to fetch the QR code as a base64 Data-URL
+// HTTP: fetch the latest QR as a base64 Data-URL
 app.get('/qr/:id', (req, res) => {
   const { id } = req.params;
   const qr = qrStore[id];
   if (!qr) {
-    return res.status(404).json({ error: 'QR code not yet available — call /start/:id first' });
+    return res
+      .status(404)
+      .json({ error: 'QR not yet available—call /start/:id first' });
   }
   res.json({ qr });
 });
 
-// Kick off
+// Launch
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`⚡️ Bot listening on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`⚡️ Bot listening on port ${PORT}`);
+});
