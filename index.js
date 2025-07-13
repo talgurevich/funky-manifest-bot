@@ -1,11 +1,9 @@
-import { webcrypto } from 'crypto';
-globalThis.crypto = webcrypto;
-
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import baileys from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
+import cron from 'node-cron';
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
 
@@ -106,7 +104,6 @@ app.post('/manifestations', async (req, res) => {
 });
 
 // Daily scheduler at 9:00 AM
-import cron from 'node-cron';
 cron.schedule('0 9 * * *', async () => {
   const users = fs.readdirSync(SESSIONS_DIR);
   for (const userId of users) {
