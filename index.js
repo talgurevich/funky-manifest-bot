@@ -1,4 +1,3 @@
-// Enhanced index.js with interactive commands and better functionality
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
@@ -8,6 +7,59 @@ const {
   default: makeWASocket,
   DisconnectReason,
   useMultiFileAuthState
+} = require('@whiskeysockets/baileys');
+
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --- Create a Baileys-compatible logger ---
+const logger = {
+  level: 'silent',
+  child: () => logger,
+  trace: (...args) => console.log('[TRACE]', ...args),
+  debug: (...args) => console.log('[DEBUG]', ...args),
+  info: (...args) => console.log('[INFO]', ...args),
+  warn: (...args) => console.warn('[WARN]', ...args),
+  error: (...args) => console.error('[ERROR]', ...args),
+  fatal: (...args) => console.error('[FATAL]', ...args)
+};
+
+// --- session & socket storage ---
+const SESSIONS_DIR = path.join(__dirname, 'sessions');
+fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+const sockets = {};
+
+// --- enhanced data store ---
+const STORE_FILE = path.join(SESSIONS_DIR, 'userdata.json');
+let userData = {};
+try {
+  userData = JSON.parse(fs.readFileSync(STORE_FILE, 'utf-8'));
+} catch {}
+
+function saveStore() {
+  fs.writeFileSync(STORE_FILE, JSON.stringify(userData, null, 2));
+}
+
+// Initialize user data structure
+function initUserData(id) {
+  if (!userData[id]) {
+    userData[id] = {
+      manifestations: [],
+      settings: {
+        enabled: true,
+        time: '09:00',
+        timezone: 'UTC',
+        frequency: 'daily'
+      },
+      stats: {
+        joined: new Date().toISOString(),
+        totalSent: 0,
+        lastSent: null
+      }
+    };
+    saveStore();
+  }
 }
 
 // Process messages from any event
@@ -52,59 +104,6 @@ async function processMessages(sock, id, messages, eventType) {
     } else {
       console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key?.fromMe}, hasMessage=${!!msg.message}`);
     }
-  }
-} = require('@whiskeysockets/baileys');
-
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// --- Create a Baileys-compatible logger ---
-const logger = {
-  level: 'silent', // 'trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'
-  child: () => logger,
-  trace: (...args) => console.log('[TRACE]', ...args),
-  debug: (...args) => console.log('[DEBUG]', ...args),
-  info: (...args) => console.log('[INFO]', ...args),
-  warn: (...args) => console.warn('[WARN]', ...args),
-  error: (...args) => console.error('[ERROR]', ...args),
-  fatal: (...args) => console.error('[FATAL]', ...args)
-};
-
-// --- session & socket storage ---
-const SESSIONS_DIR = path.join(__dirname, 'sessions');
-fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-const sockets = {};
-
-// --- enhanced data store ---
-const STORE_FILE = path.join(SESSIONS_DIR, 'userdata.json');
-let userData = {};
-try {
-  userData = JSON.parse(fs.readFileSync(STORE_FILE, 'utf-8'));
-} catch {}
-
-function saveStore() {
-  fs.writeFileSync(STORE_FILE, JSON.stringify(userData, null, 2));
-}
-
-// Initialize user data structure
-function initUserData(id) {
-  if (!userData[id]) {
-    userData[id] = {
-      manifestations: [],
-      settings: {
-        enabled: true,
-        time: '09:00',
-        timezone: 'UTC',
-        frequency: 'daily' // daily, weekly, custom
-      },
-      stats: {
-        joined: new Date().toISOString(),
-        totalSent: 0,
-        lastSent: null
-      }
-    };
-    saveStore();
   }
 }
 
@@ -359,137 +358,157 @@ What would you like to manifest today?`
 
 // --- enhanced session initialization ---
 async function initSession(id) {
+  console.log(`🚀 [${id}] Initializing session...`);
+  
   const folder = path.join(SESSIONS_DIR, id);
   fs.mkdirSync(folder, { recursive: true });
 
-  const { state, saveCreds } = await useMultiFileAuthState(folder);
-  let sock = sockets[id];
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(folder);
+    let sock = sockets[id];
 
-  if (!sock) {
-    sock = makeWASocket({ 
-      auth: state,
-      printQRInTerminal: false,
-      logger: logger, // Use our compatible logger
-      browser: ['Manifest Bot', 'Chrome', '1.0.0'] // Identify as a proper client
-    });
-    sockets[id] = sock;
-
-    // Initialize user data
-    initUserData(id);
-
-    // persist credentials
-    sock.ev.on('creds.update', saveCreds);
-
-    // Listen to ALL possible message events for debugging
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      console.log(`📬 [${id}] messages.upsert: type=${type}, count=${messages.length}`);
-      await processMessages(sock, id, messages, 'upsert');
-    });
-
-    sock.ev.on('messages.update', async (messages) => {
-      console.log(`📝 [${id}] messages.update: count=${messages.length}`);
-      await processMessages(sock, id, messages, 'update');
-    });
-
-    sock.ev.on('message-receipt.update', async (messages) => {
-      console.log(`📮 [${id}] message-receipt.update: count=${messages.length}`);
-    });
-
-    // Also listen for message history sync
-    sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest }) => {
-      console.log(`📚 [${id}] Message history set: ${messages.length} messages, ${chats.length} chats`);
-      if (messages.length > 0) {
-        console.log(`📜 [${id}] Sample message from history:`, JSON.stringify(messages[0], null, 2));
-      }
-    });
-
-    // Listen for chats updates
-    sock.ev.on('chats.set', (chats) => {
-      console.log(`💬 [${id}] Chats set: ${chats.length} chats`);
-    });
-
-    // Listen for contacts updates  
-    sock.ev.on('contacts.set', (contacts) => {
-      console.log(`👥 [${id}] Contacts set: ${contacts.length} contacts`);
-    });
-
-    // listen for connection updates
-    sock.ev.on('connection.update', async update => {
-      const { qr, connection, lastDisconnect, receivedPendingNotifications } = update;
+    if (!sock) {
+      console.log(`📱 [${id}] Creating new WhatsApp socket...`);
       
-      console.log(`🔄 [${id}] Connection update:`, { connection, qr: !!qr, receivedPendingNotifications });
+      sock = makeWASocket({ 
+        auth: state,
+        printQRInTerminal: false,
+        logger: logger,
+        browser: ['Manifest Bot', 'Chrome', '1.0.0'],
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000
+      });
+      
+      sockets[id] = sock;
 
-      if (qr) {
-        console.log(`📱 [${id}] QR code generated`);
-        sock.lastQR = qr;
-      }
+      // Initialize user data
+      initUserData(id);
 
-      if (connection === 'connecting') {
-        console.log(`🔄 [${id}] Connecting to WhatsApp...`);
-      }
+      // persist credentials
+      sock.ev.on('creds.update', saveCreds);
 
-      if (connection === 'open') {
-        console.log(`✅ [${id}] WhatsApp connected successfully`);
-        console.log(`👤 [${id}] User info:`, sock.user);
-        sock.isConnected = true;
+      // Listen to ALL possible message events for debugging
+      sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        console.log(`📬 [${id}] messages.upsert: type=${type}, count=${messages.length}`);
+        await processMessages(sock, id, messages, 'upsert');
+      });
+
+      sock.ev.on('messages.update', async (messages) => {
+        console.log(`📝 [${id}] messages.update: count=${messages.length}`);
+        await processMessages(sock, id, messages, 'update');
+      });
+
+      sock.ev.on('message-receipt.update', async (messages) => {
+        console.log(`📮 [${id}] message-receipt.update: count=${messages.length}`);
+      });
+
+      // Also listen for message history sync
+      sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest }) => {
+        console.log(`📚 [${id}] Message history set: ${messages.length} messages, ${chats.length} chats`);
+        if (messages.length > 0) {
+          console.log(`📜 [${id}] Sample message from history:`, JSON.stringify(messages[0], null, 2));
+        }
+      });
+
+      // Listen for chats updates
+      sock.ev.on('chats.set', (chats) => {
+        console.log(`💬 [${id}] Chats set: ${chats.length} chats`);
+      });
+
+      // Listen for contacts updates  
+      sock.ev.on('contacts.set', (contacts) => {
+        console.log(`👥 [${id}] Contacts set: ${contacts.length} contacts`);
+      });
+
+      // listen for connection updates
+      sock.ev.on('connection.update', async update => {
+        const { qr, connection, lastDisconnect, receivedPendingNotifications } = update;
         
-        const jid = `${id}@s.whatsapp.net`;
-        try {
-          await sock.sendMessage(jid, {
-            text: `🎉 *Welcome to Manifest Bot!*
+        console.log(`🔄 [${id}] Connection update:`, { connection, qr: !!qr, receivedPendingNotifications });
+
+        if (qr) {
+          console.log(`📱 [${id}] QR code generated`);
+          sock.lastQR = qr;
+        }
+
+        if (connection === 'connecting') {
+          console.log(`🔄 [${id}] Connecting to WhatsApp...`);
+        }
+
+        if (connection === 'open') {
+          console.log(`✅ [${id}] WhatsApp connected successfully`);
+          console.log(`👤 [${id}] User info:`, sock.user);
+          sock.isConnected = true;
+          
+          const jid = `${id}@s.whatsapp.net`;
+          try {
+            await sock.sendMessage(jid, {
+              text: `🎉 *Welcome to Manifest Bot!*
 
 Your number is now connected! I'll send you daily manifestations and you can interact with me anytime.
 
 Type /help to see what I can do, or just send me your manifestation naturally!
 
 ✨ Ready to manifest your dreams! ✨`
-          });
-          console.log(`📨 [${id}] Welcome message sent`);
-        } catch (error) {
-          console.error(`❌ [${id}] Failed to send welcome message:`, error);
+            });
+            console.log(`📨 [${id}] Welcome message sent`);
+          } catch (error) {
+            console.error(`❌ [${id}] Failed to send welcome message:`, error);
+          }
         }
-      }
 
-      if (connection === 'close') {
-        console.log(`❌ [${id}] WhatsApp connection closed`);
-        sock.isConnected = false;
-        
-        const code = lastDisconnect?.error?.output?.statusCode;
-        const loggedOut = code === DisconnectReason.loggedOut;
-        console.log(`🔍 [${id}] Close reason: ${code}, logged out: ${loggedOut}`);
-        
-        delete sockets[id];
+        if (connection === 'close') {
+          console.log(`❌ [${id}] WhatsApp connection closed`);
+          sock.isConnected = false;
+          
+          const code = lastDisconnect?.error?.output?.statusCode;
+          const loggedOut = code === DisconnectReason.loggedOut;
+          console.log(`🔍 [${id}] Close reason: ${code}, logged out: ${loggedOut}`);
+          
+          delete sockets[id];
 
-        if (loggedOut) {
-          console.log(`🗑️ [${id}] Removing session files due to logout`);
-          fs.rmSync(folder, { recursive: true, force: true });
-        } else {
-          console.log(`🔄 [${id}] Reconnecting...`);
-          setTimeout(() => initSession(id), 5000); // Wait 5 seconds before reconnecting
+          if (loggedOut) {
+            console.log(`🗑️ [${id}] Removing session files due to logout`);
+            fs.rmSync(folder, { recursive: true, force: true });
+          } else {
+            console.log(`🔄 [${id}] Reconnecting...`);
+            setTimeout(() => initSession(id), 5000);
+          }
         }
-      }
-    });
-  }
-
-  if (sock.lastQR) {
-    return sock.lastQR;
-  }
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      sock.ev.off('connection.update', onUpdate);
-      reject(new Error('Timed out waiting for QR'));
-    }, 30_000);
-
-    function onUpdate(u) {
-      if (u.qr) {
-        clearTimeout(timer);
-        sock.ev.off('connection.update', onUpdate);
-        resolve(u.qr);
-      }
+      });
     }
-    sock.ev.on('connection.update', onUpdate);
-  });
+
+    // if we already have a QR, return it immediately
+    if (sock.lastQR) {
+      console.log(`📱 [${id}] Using cached QR code`);
+      return sock.lastQR;
+    }
+
+    // otherwise wait up to 30s for the first QR event
+    console.log(`⏳ [${id}] Waiting for QR code generation...`);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        sock.ev.off('connection.update', onUpdate);
+        console.log(`⏰ [${id}] QR generation timed out - assuming already connected`);
+        resolve(null);
+      }, 30_000);
+
+      function onUpdate(u) {
+        if (u.qr) {
+          clearTimeout(timer);
+          sock.ev.off('connection.update', onUpdate);
+          console.log(`📱 [${id}] QR code generated successfully`);
+          resolve(u.qr);
+        }
+      }
+      sock.ev.on('connection.update', onUpdate);
+    });
+    
+  } catch (error) {
+    console.error(`❌ [${id}] Session initialization error:`, error);
+    return null;
+  }
 }
 
 // --- enhanced REST endpoints ---
@@ -599,16 +618,14 @@ app.listen(PORT, () => {
 // Prevent app crashes from unhandled errors
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
-  // Don't exit - keep the app running
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit - keep the app running
 });
 
 // --- enhanced daily cron job ---
-cron.schedule('0 * * * *', async () => { // Run every hour to check custom times
+cron.schedule('0 * * * *', async () => {
   const currentTime = new Date();
   const currentHour = currentTime.getHours().toString().padStart(2, '0');
   const currentMinute = currentTime.getMinutes().toString().padStart(2, '0');
@@ -619,18 +636,15 @@ cron.schedule('0 * * * *', async () => { // Run every hour to check custom times
   for (const id of Object.keys(userData)) {
     const user = userData[id];
     
-    // Skip if disabled or no manifestations
     if (!user.settings.enabled || user.manifestations.length === 0) {
       continue;
     }
     
-    // Check if it's time to send
     const shouldSend = user.settings.time === currentTimeString;
     
-    // For weekly frequency, also check if it's the right day
     if (user.settings.frequency === 'weekly' && shouldSend) {
       const dayOfWeek = currentTime.getDay();
-      if (dayOfWeek !== 1) { // Only Monday for weekly
+      if (dayOfWeek !== 1) {
         continue;
       }
     }
@@ -645,7 +659,6 @@ cron.schedule('0 * * * *', async () => { // Run every hour to check custom times
     
     const jid = `${id}@s.whatsapp.net`;
     try {
-      // Pick a random manifestation if multiple exist
       const randomIndex = Math.floor(Math.random() * user.manifestations.length);
       const manifestation = user.manifestations[randomIndex];
       
@@ -659,7 +672,6 @@ cron.schedule('0 * * * *', async () => { // Run every hour to check custom times
 Type /help for more options or /pause to stop daily messages.`
       });
       
-      // Update stats
       user.stats.totalSent++;
       user.stats.lastSent = new Date().toISOString();
       saveStore();
@@ -678,7 +690,6 @@ cron.schedule('0 2 * * *', () => {
   const activeSockets = Object.keys(sockets);
   const userDataKeys = Object.keys(userData);
   
-  // Remove user data for users without active sockets (after 30 days)
   userDataKeys.forEach(id => {
     if (!activeSockets.includes(id)) {
       const user = userData[id];
