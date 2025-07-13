@@ -54,19 +54,28 @@ function initUserData(id) {
 // --- message handling ---
 function handleIncomingMessage(sock, message) {
   const { remoteJid, body } = message;
-  if (!body || !remoteJid.endsWith('@s.whatsapp.net')) return;
+  
+  // Only handle messages from individual users (not groups)
+  if (!body || !remoteJid || !remoteJid.endsWith('@s.whatsapp.net')) {
+    console.log(`⏭️ Skipping message from ${remoteJid}: not a user message`);
+    return;
+  }
 
   const userId = remoteJid.split('@')[0];
   const text = body.toLowerCase().trim();
+  
+  console.log(`🔍 [${userId}] Processing message: "${text}"`);
 
   // Initialize user if not exists
   initUserData(userId);
 
   // Command routing
   if (text.startsWith('/')) {
+    console.log(`🤖 [${userId}] Processing command: ${text}`);
     handleCommand(sock, userId, text, remoteJid);
   } else {
     // Handle natural language interactions
+    console.log(`💬 [${userId}] Processing natural message: ${text}`);
     handleNaturalMessage(sock, userId, text, remoteJid);
   }
 }
@@ -74,10 +83,16 @@ function handleIncomingMessage(sock, message) {
 async function handleCommand(sock, userId, command, jid) {
   const user = userData[userId];
   
+  console.log(`🎯 [${userId}] Executing command: ${command}`);
+  
   try {
-    switch (command.split(' ')[0]) {
+    const commandName = command.split(' ')[0];
+    console.log(`📝 [${userId}] Command name: ${commandName}`);
+    
+    switch (commandName) {
       case '/start':
       case '/help':
+        console.log(`📋 [${userId}] Sending help message`);
         await sock.sendMessage(jid, {
           text: `🌟 *Welcome to Manifest Bot!*
 
@@ -100,6 +115,7 @@ async function handleCommand(sock, userId, command, jid) {
 
 You can also just type your manifestation naturally!`
         });
+        console.log(`✅ [${userId}] Help message sent successfully`);
         break;
 
       case '/add':
@@ -239,15 +255,20 @@ You can also just type your manifestation naturally!`
         break;
 
       default:
+        console.log(`❓ [${userId}] Unknown command: ${commandName}`);
         await sock.sendMessage(jid, { 
           text: '❓ Unknown command. Type /help for available commands.' 
         });
     }
   } catch (error) {
-    console.error(`Error handling command ${command}:`, error);
-    await sock.sendMessage(jid, { 
-      text: '❌ An error occurred processing your command. Please try again.' 
-    });
+    console.error(`❌ [${userId}] Error handling command ${command}:`, error);
+    try {
+      await sock.sendMessage(jid, { 
+        text: '❌ An error occurred processing your command. Please try again.' 
+      });
+    } catch (sendError) {
+      console.error(`❌ [${userId}] Failed to send error message:`, sendError);
+    }
   }
 }
 
@@ -305,13 +326,25 @@ async function initSession(id) {
       if (type === 'notify') {
         for (const msg of messages) {
           if (!msg.key.fromMe && msg.message) {
-            const text = msg.message.conversation || 
-                        msg.message.extendedTextMessage?.text || '';
+            // Extract text from different message types
+            let text = '';
+            if (msg.message.conversation) {
+              text = msg.message.conversation;
+            } else if (msg.message.extendedTextMessage?.text) {
+              text = msg.message.extendedTextMessage.text;
+            } else if (msg.message.imageMessage?.caption) {
+              text = msg.message.imageMessage.caption;
+            } else if (msg.message.videoMessage?.caption) {
+              text = msg.message.videoMessage.caption;
+            }
             
-            handleIncomingMessage(sock, {
-              remoteJid: msg.key.remoteJid,
-              body: text
-            });
+            if (text) {
+              console.log(`📩 [${id}] Received message: "${text}"`);
+              handleIncomingMessage(sock, {
+                remoteJid: msg.key.remoteJid,
+                body: text
+              });
+            }
           }
         }
       }
