@@ -311,7 +311,9 @@ async function initSession(id) {
   if (!sock) {
     sock = makeWASocket({ 
       auth: state,
-      printQRInTerminal: false
+      printQRInTerminal: false,
+      logger: console, // Add logging
+      browser: ['Manifest Bot', 'Chrome', '1.0.0'] // Identify as a proper client
     });
     sockets[id] = sock;
 
@@ -321,10 +323,19 @@ async function initSession(id) {
     // persist credentials
     sock.ev.on('creds.update', saveCreds);
 
-    // listen for incoming messages
+    // listen for incoming messages with comprehensive logging
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      console.log(`📬 [${id}] Messages upsert event: type=${type}, count=${messages.length}`);
+      
       if (type === 'notify') {
         for (const msg of messages) {
+          console.log(`📝 [${id}] Message details:`, {
+            fromMe: msg.key.fromMe,
+            remoteJid: msg.key.remoteJid,
+            hasMessage: !!msg.message,
+            messageKeys: msg.message ? Object.keys(msg.message) : []
+          });
+          
           if (!msg.key.fromMe && msg.message) {
             // Extract text from different message types
             let text = '';
@@ -339,37 +350,59 @@ async function initSession(id) {
             }
             
             if (text) {
-              console.log(`📩 [${id}] Received message: "${text}"`);
+              console.log(`📩 [${id}] Received message: "${text}" from ${msg.key.remoteJid}`);
               handleIncomingMessage(sock, {
                 remoteJid: msg.key.remoteJid,
                 body: text
               });
+            } else {
+              console.log(`⚠️ [${id}] No text found in message:`, JSON.stringify(msg.message, null, 2));
             }
           }
         }
       }
     });
 
+    // Also listen for message history sync
+    sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest }) => {
+      console.log(`📚 [${id}] Message history set: ${messages.length} messages, ${chats.length} chats`);
+    });
+
     // listen for connection updates
     sock.ev.on('connection.update', async update => {
-      const { qr, connection, lastDisconnect } = update;
+      const { qr, connection, lastDisconnect, receivedPendingNotifications } = update;
+      
+      console.log(`🔄 [${id}] Connection update:`, { connection, qr: !!qr, receivedPendingNotifications });
 
-      if (qr) sock.lastQR = qr;
+      if (qr) {
+        console.log(`📱 [${id}] QR code generated`);
+        sock.lastQR = qr;
+      }
+
+      if (connection === 'connecting') {
+        console.log(`🔄 [${id}] Connecting to WhatsApp...`);
+      }
 
       if (connection === 'open') {
         console.log(`✅ [${id}] WhatsApp connected successfully`);
+        console.log(`👤 [${id}] User info:`, sock.user);
         sock.isConnected = true;
         
         const jid = `${id}@s.whatsapp.net`;
-        await sock.sendMessage(jid, {
-          text: `🎉 *Welcome to Manifest Bot!*
+        try {
+          await sock.sendMessage(jid, {
+            text: `🎉 *Welcome to Manifest Bot!*
 
 Your number is now connected! I'll send you daily manifestations and you can interact with me anytime.
 
 Type /help to see what I can do, or just send me your manifestation naturally!
 
 ✨ Ready to manifest your dreams! ✨`
-        });
+          });
+          console.log(`📨 [${id}] Welcome message sent`);
+        } catch (error) {
+          console.error(`❌ [${id}] Failed to send welcome message:`, error);
+        }
       }
 
       if (connection === 'close') {
@@ -378,12 +411,16 @@ Type /help to see what I can do, or just send me your manifestation naturally!
         
         const code = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = code === DisconnectReason.loggedOut;
+        console.log(`🔍 [${id}] Close reason: ${code}, logged out: ${loggedOut}`);
+        
         delete sockets[id];
 
         if (loggedOut) {
+          console.log(`🗑️ [${id}] Removing session files due to logout`);
           fs.rmSync(folder, { recursive: true, force: true });
         } else {
-          await initSession(id);
+          console.log(`🔄 [${id}] Reconnecting...`);
+          setTimeout(() => initSession(id), 5000); // Wait 5 seconds before reconnecting
         }
       }
     });
@@ -466,6 +503,26 @@ app.post('/user/:id/settings', (req, res) => {
   Object.assign(userData[id].settings, settings);
   saveStore();
   res.json({ success: true });
+});
+
+// 5) POST /test/:id → test message sending
+app.post('/test/:id', async (req, res) => {
+  const id = req.params.id;
+  const { message } = req.body;
+  
+  const sock = sockets[id];
+  if (!sock) {
+    return res.status(404).json({ error: 'No active session' });
+  }
+  
+  try {
+    const jid = `${id}@s.whatsapp.net`;
+    await sock.sendMessage(jid, { text: message || 'Test message from bot!' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error(`Test message error:`, error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // catch-all → serve front-end
