@@ -10,71 +10,62 @@ const {
   DisconnectReason
 } = require('@whiskeysockets/baileys');
 
-// (1) Polyfill globalThis.crypto only if it doesn't exist
+// polyfill globalThis.crypto if missing
 if (typeof globalThis.crypto === 'undefined') {
   globalThis.crypto = webcrypto;
 }
 
-// (2) Prepare sessions directory
+// where we store auth folders
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-// keep sockets indexed by your phone‐ID
+// keep sockets by phone-ID
 const sockets = {};
 
-// Initialize (or re-use) a WhatsApp session for a given ID
 async function initSession(id) {
   const folder = path.join(SESSIONS_DIR, id);
   fs.mkdirSync(folder, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(folder);
 
-  // reuse socket if present
   let sock = sockets[id];
   if (!sock) {
     sock = makeWASocket({ auth: state });
     sockets[id] = sock;
 
-    // persist credentials whenever they update
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async update => {
-      const { qr, connection, lastDisconnect, me } = update;
+      const { qr, connection, lastDisconnect } = update;
 
-      // stash the QR string whenever it arrives
+      // stash QR
       if (qr) sock.lastQR = qr;
 
-      // once fully open, send your welcome/confirmation message
+      // once open, send welcome to your number
       if (connection === 'open') {
-        if (me?.id) {
-          await sock.sendMessage(me.id, {
-            text: '✅ Your number has been registered! Your manifestation has been registered.'
-          });
-        }
+        const userJid = `${id}@s.whatsapp.net`;
+        await sock.sendMessage(userJid, {
+          text: '✅ Your number has been registered! Your manifestation has been registered.'
+        });
       }
 
-      // handle closes: either logged-out (clear state) or reconnect
+      // on close: if logged out, clear creds; otherwise reconnect
       if (connection === 'close') {
         const status = lastDisconnect?.error?.output?.statusCode;
-        const loggedOut = status === DisconnectReason.loggedOut;
-
-        // drop old socket
+        const wasLoggedOut = status === DisconnectReason.loggedOut;
         delete sockets[id];
 
-        if (loggedOut) {
-          // fully clear your saved creds so you can re-scan next time
+        if (wasLoggedOut) {
           fs.rmSync(folder, { recursive: true, force: true });
         } else {
-          // reconnect automatically
           await initSession(id);
         }
       }
     });
   }
 
-  // if we already have a QR, return it immediately
   if (sock.lastQR) return sock.lastQR;
 
-  // otherwise wait up to 30s for the next QR event
+  // wait up to 30s for QR
   return new Promise((resolve, reject) => {
     const to = setTimeout(() => {
       sock.ev.off('connection.update', handler);
@@ -95,7 +86,6 @@ async function initSession(id) {
 const app = express();
 app.use(express.json());
 
-// JSON API endpoint: fetch a data-URL QR for this ID
 app.get('/start/:id', async (req, res) => {
   try {
     const qrString = await initSession(req.params.id);
@@ -106,13 +96,12 @@ app.get('/start/:id', async (req, res) => {
   }
 });
 
-// serve your React/HTML client
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+app.get('*', (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'index.html'))
+);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`⚡️ Bot listening on port ${PORT}`);
-});
+app.listen(PORT, () =>
+  console.log(`⚡️ Bot listening on port ${PORT}`)
+);
