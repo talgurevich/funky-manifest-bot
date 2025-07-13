@@ -5,7 +5,7 @@ if (!globalThis.crypto) globalThis.crypto = webcrypto;
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 
 const app = express();
 app.use(express.json());
