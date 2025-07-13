@@ -341,16 +341,13 @@ async function initSession(id) {
       
       if (type === 'notify') {
         for (const msg of messages) {
-          console.log(`📝 [${id}] Message details:`, {
-            fromMe: msg.key.fromMe,
-            remoteJid: msg.key.remoteJid,
-            hasMessage: !!msg.message,
-            messageKeys: msg.message ? Object.keys(msg.message) : []
-          });
+          console.log(`📝 [${id}] Full message object:`, JSON.stringify(msg, null, 2));
           
           if (!msg.key.fromMe && msg.message) {
             // Extract text from different message types
             let text = '';
+            
+            // Check all possible text locations
             if (msg.message.conversation) {
               text = msg.message.conversation;
             } else if (msg.message.extendedTextMessage?.text) {
@@ -359,17 +356,29 @@ async function initSession(id) {
               text = msg.message.imageMessage.caption;
             } else if (msg.message.videoMessage?.caption) {
               text = msg.message.videoMessage.caption;
+            } else if (msg.message.documentMessage?.caption) {
+              text = msg.message.documentMessage.caption;
+            } else if (msg.message.buttonsResponseMessage?.selectedButtonId) {
+              text = msg.message.buttonsResponseMessage.selectedButtonId;
+            } else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) {
+              text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
             }
             
+            console.log(`🔍 [${id}] Extracted text: "${text}"`);
+            console.log(`📋 [${id}] Message keys available:`, Object.keys(msg.message));
+            
             if (text) {
-              console.log(`📩 [${id}] Received message: "${text}" from ${msg.key.remoteJid}`);
+              console.log(`📩 [${id}] Processing message: "${text}" from ${msg.key.remoteJid}`);
               handleIncomingMessage(sock, {
                 remoteJid: msg.key.remoteJid,
                 body: text
               });
             } else {
-              console.log(`⚠️ [${id}] No text found in message:`, JSON.stringify(msg.message, null, 2));
+              console.log(`⚠️ [${id}] No text found in message. Available message types:`, Object.keys(msg.message));
+              console.log(`📄 [${id}] Full message content:`, JSON.stringify(msg.message, null, 2));
             }
+          } else {
+            console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key.fromMe}, hasMessage=${!!msg.message}`);
           }
         }
       }
