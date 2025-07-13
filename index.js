@@ -73,10 +73,13 @@ async function connectUser(userId) {
 // Save manifestation list
 app.post('/manifestations', (req, res) => {
   const { userId, items } = req.body;
-  if (!userId || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid payload' });
+  if (!userId || !Array.isArray(items)) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
   fs.writeFileSync(path.join(DATA_DIR, `${userId}.json`), JSON.stringify(items, null, 2));
   return res.json({ success: true });
 });
 
-// Start server\const PORT = process.env.PORT || 3000;
+// Start server
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`⚡️ Bot listening on port ${PORT}`));
