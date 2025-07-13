@@ -463,26 +463,41 @@ Type /help to see what I can do, or just send me your manifestation naturally!
 
 // 1) GET /start/:id → return { qr, linked }
 app.get('/start/:id', async (req, res) => {
+  const id = req.params.id;
+  console.log(`🔄 [${id}] Starting session...`);
+  
   try {
-    const sock = sockets[req.params.id];
+    const sock = sockets[id];
     
     // Check if socket exists and is connected
     if (sock && (sock.isConnected || sock.user)) {
+      console.log(`✅ [${id}] Already connected`);
       return res.json({ linked: true });
     }
     
-    const qr = await initSession(req.params.id);
+    const qr = await initSession(id);
     if (!qr) {
+      console.log(`✅ [${id}] Session established without QR (already linked)`);
       return res.json({ linked: true });
     }
+    
+    console.log(`📱 [${id}] Generating QR data URL...`);
     const dataUrl = await qrcode.toDataURL(qr);
+    console.log(`✅ [${id}] QR data URL generated successfully`);
     res.json({ qr: dataUrl, linked: false });
   } catch (e) {
+    console.error(`❌ [${id}] Error in /start:`, e.message);
+    
+    // Don't crash the app - return appropriate response
     if (e.message.includes('Timed out')) {
-      return res.json({ linked: true });
+      return res.json({ linked: true, message: 'Session timeout - may already be connected' });
     }
-    console.error(`Error in /start/${req.params.id}:`, e);
-    res.status(500).json({ error: e.message });
+    
+    res.status(500).json({ 
+      error: 'Failed to initialize session', 
+      message: e.message,
+      suggestion: 'Please try refreshing the page'
+    });
   }
 });
 
@@ -546,6 +561,17 @@ app.get('*', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`⚡️ Enhanced Manifest Bot listening on port ${PORT}`);
+});
+
+// Prevent app crashes from unhandled errors
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  // Don't exit - keep the app running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - keep the app running
 });
 
 // --- enhanced daily cron job ---
