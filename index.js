@@ -8,6 +8,51 @@ const {
   default: makeWASocket,
   DisconnectReason,
   useMultiFileAuthState
+}
+
+// Process messages from any event
+async function processMessages(sock, id, messages, eventType) {
+  for (const msg of messages) {
+    console.log(`📝 [${id}] Processing message from ${eventType}:`, JSON.stringify(msg, null, 2));
+    
+    if (!msg.key?.fromMe && msg.message) {
+      // Extract text from different message types
+      let text = '';
+      
+      // Check all possible text locations
+      if (msg.message.conversation) {
+        text = msg.message.conversation;
+      } else if (msg.message.extendedTextMessage?.text) {
+        text = msg.message.extendedTextMessage.text;
+      } else if (msg.message.imageMessage?.caption) {
+        text = msg.message.imageMessage.caption;
+      } else if (msg.message.videoMessage?.caption) {
+        text = msg.message.videoMessage.caption;
+      } else if (msg.message.documentMessage?.caption) {
+        text = msg.message.documentMessage.caption;
+      } else if (msg.message.buttonsResponseMessage?.selectedButtonId) {
+        text = msg.message.buttonsResponseMessage.selectedButtonId;
+      } else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) {
+        text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+      }
+      
+      console.log(`🔍 [${id}] Extracted text: "${text}"`);
+      console.log(`📋 [${id}] Message keys available:`, Object.keys(msg.message));
+      
+      if (text) {
+        console.log(`📩 [${id}] Processing message: "${text}" from ${msg.key.remoteJid}`);
+        handleIncomingMessage(sock, {
+          remoteJid: msg.key.remoteJid,
+          body: text
+        });
+      } else {
+        console.log(`⚠️ [${id}] No text found in message. Available message types:`, Object.keys(msg.message));
+        console.log(`📄 [${id}] Full message content:`, JSON.stringify(msg.message, null, 2));
+      }
+    } else {
+      console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key?.fromMe}, hasMessage=${!!msg.message}`);
+    }
+  }
 } = require('@whiskeysockets/baileys');
 
 const app = express();
@@ -335,58 +380,37 @@ async function initSession(id) {
     // persist credentials
     sock.ev.on('creds.update', saveCreds);
 
-    // listen for incoming messages with comprehensive logging
+    // Listen to ALL possible message events for debugging
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      console.log(`📬 [${id}] Messages upsert event: type=${type}, count=${messages.length}`);
-      
-      if (type === 'notify') {
-        for (const msg of messages) {
-          console.log(`📝 [${id}] Full message object:`, JSON.stringify(msg, null, 2));
-          
-          if (!msg.key.fromMe && msg.message) {
-            // Extract text from different message types
-            let text = '';
-            
-            // Check all possible text locations
-            if (msg.message.conversation) {
-              text = msg.message.conversation;
-            } else if (msg.message.extendedTextMessage?.text) {
-              text = msg.message.extendedTextMessage.text;
-            } else if (msg.message.imageMessage?.caption) {
-              text = msg.message.imageMessage.caption;
-            } else if (msg.message.videoMessage?.caption) {
-              text = msg.message.videoMessage.caption;
-            } else if (msg.message.documentMessage?.caption) {
-              text = msg.message.documentMessage.caption;
-            } else if (msg.message.buttonsResponseMessage?.selectedButtonId) {
-              text = msg.message.buttonsResponseMessage.selectedButtonId;
-            } else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) {
-              text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
-            }
-            
-            console.log(`🔍 [${id}] Extracted text: "${text}"`);
-            console.log(`📋 [${id}] Message keys available:`, Object.keys(msg.message));
-            
-            if (text) {
-              console.log(`📩 [${id}] Processing message: "${text}" from ${msg.key.remoteJid}`);
-              handleIncomingMessage(sock, {
-                remoteJid: msg.key.remoteJid,
-                body: text
-              });
-            } else {
-              console.log(`⚠️ [${id}] No text found in message. Available message types:`, Object.keys(msg.message));
-              console.log(`📄 [${id}] Full message content:`, JSON.stringify(msg.message, null, 2));
-            }
-          } else {
-            console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key.fromMe}, hasMessage=${!!msg.message}`);
-          }
-        }
-      }
+      console.log(`📬 [${id}] messages.upsert: type=${type}, count=${messages.length}`);
+      await processMessages(sock, id, messages, 'upsert');
+    });
+
+    sock.ev.on('messages.update', async (messages) => {
+      console.log(`📝 [${id}] messages.update: count=${messages.length}`);
+      await processMessages(sock, id, messages, 'update');
+    });
+
+    sock.ev.on('message-receipt.update', async (messages) => {
+      console.log(`📮 [${id}] message-receipt.update: count=${messages.length}`);
     });
 
     // Also listen for message history sync
     sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest }) => {
       console.log(`📚 [${id}] Message history set: ${messages.length} messages, ${chats.length} chats`);
+      if (messages.length > 0) {
+        console.log(`📜 [${id}] Sample message from history:`, JSON.stringify(messages[0], null, 2));
+      }
+    });
+
+    // Listen for chats updates
+    sock.ev.on('chats.set', (chats) => {
+      console.log(`💬 [${id}] Chats set: ${chats.length} chats`);
+    });
+
+    // Listen for contacts updates  
+    sock.ev.on('contacts.set', (contacts) => {
+      console.log(`👥 [${id}] Contacts set: ${contacts.length} contacts`);
     });
 
     // listen for connection updates
