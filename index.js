@@ -9,43 +9,39 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baile
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(process.cwd(), 'public'))));
+app.use(express.static(path.join(process.cwd(), 'public')));
 
-// Paths on disk
+// Ensure data directories exist
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
 const DATA_DIR     = path.join(process.cwd(), 'data');
 for (const dir of [SESSIONS_DIR, DATA_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-// In-memory map of active sockets
+// In‐memory map of user sockets
 const sockets = {};
 
 /**
- * Establish (or re-establish) a WhatsApp session for a given user.
- * If `res` is passed, it will respond to the original HTTP /start request.
+ * Initialize or re‐initialize a WhatsApp session for `userId`.
+ * If `res` is provided, respond to the HTTP /start call with the QR or success.
  */
 async function initSession(userId, res = null) {
-  // Clear any old socket so we don't leak
+  // Logout and clear previous session if present
   if (sockets[userId]?.sock) {
-    try { sockets[userId].sock.logout() } catch {}
+    try { sockets[userId].sock.logout(); } catch {}
   }
 
-  // Always delete old creds so we force a QR on initial /start
+  // Force fresh creds for QR
   const userDir = path.join(SESSIONS_DIR, userId);
-  if (fs.existsSync(userDir)) {
-    fs.rmSync(userDir, { recursive: true, force: true });
-  }
+  if (fs.existsSync(userDir)) fs.rmSync(userDir, { recursive: true, force: true });
   fs.mkdirSync(userDir, { recursive: true });
 
   // Load auth state
   const { state, saveCreds } = await useMultiFileAuthState(userDir);
-
-  // Create the socket
   const sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
-    defaultQueryTimeoutMs: 60000,  // give USync up to 60s
+    defaultQueryTimeoutMs: 60000,  // extend USync timeout
   });
   sockets[userId] = { sock, saveCreds };
   sock.ev.on('creds.update', saveCreds);
@@ -54,36 +50,34 @@ async function initSession(userId, res = null) {
   sock.ev.on('connection.update', async update => {
     console.log('connection.update →', update);
 
-    // 1) Handle QR emission
+    // Emit QR to HTTP
     if (!responded && update.qr && res) {
       responded = true;
       const svg = await QRCode.toString(update.qr, { type: 'svg', margin: 1 });
-      const b64 = Buffer.from(svg).toString('base64');
-      return res.json({ qr: b64 });
+      return res.json({ qr: Buffer.from(svg).toString('base64') });
     }
 
-    // 2) Handle successful open
+    // On successful open
     if (!responded && update.connection === 'open' && res) {
       responded = true;
       saveCreds();
       return res.json({ success: true });
     }
 
-    // 3) Handle unexpected close → reconnect
+    // On unexpected close, reconnect
     if (update.connection === 'close') {
       const err = update.lastDisconnect?.error;
       const code = err?.output?.statusCode;
       const loggedOut = code === DisconnectReason.loggedOut;
-      console.log(`Connection closed for ${userId}:`, err, '– loggedOut?', loggedOut);
+      console.log(`Connection closed for ${userId}:`, err, 'loggedOut?', loggedOut);
       if (!loggedOut) {
-        console.log(`Reconnecting WhatsApp for ${userId}...`);
-        // No HTTP response here, just restart the socket
+        console.log(`Reconnecting for ${userId}...`);
         await initSession(userId, null);
       }
     }
   });
 
-  // If this was the initial /start call, enforce a 15s timeout
+  // 15s HTTP timeout for QR
   if (res) {
     setTimeout(() => {
       if (!responded && !res.headersSent) {
@@ -93,7 +87,7 @@ async function initSession(userId, res = null) {
   }
 }
 
-// HTTP endpoint to kick off (or re-kick) a session
+// /start endpoint
 app.get('/start/:userId', (req, res) => {
   initSession(req.params.userId, res).catch(err => {
     console.error('Init session error', err);
@@ -101,7 +95,7 @@ app.get('/start/:userId', (req, res) => {
   });
 });
 
-// Save manifestations + immediate WhatsApp confirmation
+// Save manifestations + immediate confirmation
 app.post('/manifestations', async (req, res) => {
   const { userId, items } = req.body;
   if (!userId || !Array.isArray(items)) {
@@ -109,10 +103,12 @@ app.post('/manifestations', async (req, res) => {
   }
 
   try {
-    fs.writeFileSync(path.join(DATA_DIR, `${userId}.json`), JSON.stringify(items, null, 2));
+    fs.writeFileSync(
+      path.join(DATA_DIR, `${userId}.json`),
+      JSON.stringify(items, null, 2)
+    );
     res.json({ success: true });
 
-    // Send confirmation if the socket is open
     const session = sockets[userId];
     if (session) {
       try {
@@ -121,7 +117,7 @@ app.post('/manifestations', async (req, res) => {
         });
         session.saveCreds();
       } catch (sendErr) {
-        console.error('Confirmation send failed (socket closed?)', sendErr);
+        console.error('Confirmation send failed:', sendErr);
       }
     }
   } catch (err) {
@@ -130,15 +126,15 @@ app.post('/manifestations', async (req, res) => {
   }
 });
 
-// Daily manifest push at 09:00
+// Daily manifest at 09:00
 cron.schedule('0 9 * * *', () => {
   for (const userId of fs.readdirSync(SESSIONS_DIR)) {
     const session = sockets[userId];
     if (!session) continue;
     try {
-      const dataPath = path.join(DATA_DIR, `${userId}.json`);
-      if (!fs.existsSync(dataPath)) continue;
-      const items = JSON.parse(fs.readFileSync(dataPath));
+      const file = path.join(DATA_DIR, `${userId}.json`);
+      if (!fs.existsSync(file)) continue;
+      const items = JSON.parse(fs.readFileSync(file));
       if (!items.length) continue;
       const pick = items[Math.floor(Math.random() * items.length)];
 
