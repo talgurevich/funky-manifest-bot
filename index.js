@@ -9,65 +9,99 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baile
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(process.cwd(), 'public')));
+app.use(express.static(path.join(process.cwd(), 'public'))));
 
-// Directories
+// Paths on disk
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
 const DATA_DIR     = path.join(process.cwd(), 'data');
-if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-if (!fs.existsSync(DATA_DIR))     fs.mkdirSync(DATA_DIR,     { recursive: true });
+for (const dir of [SESSIONS_DIR, DATA_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
-// In‐memory sockets
+// In-memory map of active sockets
 const sockets = {};
 
-// QR & Session endpoint
-app.get('/start/:userId', async (req, res) => {
-  const userId = req.params.userId;
-  try {
-    const userDir = path.join(SESSIONS_DIR, userId);
-    if (fs.existsSync(userDir)) fs.rmSync(userDir, { recursive: true, force: true });
-    fs.mkdirSync(userDir, { recursive: true });
+/**
+ * Establish (or re-establish) a WhatsApp session for a given user.
+ * If `res` is passed, it will respond to the original HTTP /start request.
+ */
+async function initSession(userId, res = null) {
+  // Clear any old socket so we don't leak
+  if (sockets[userId]?.sock) {
+    try { sockets[userId].sock.logout() } catch {}
+  }
 
-    const { state, saveCreds } = await useMultiFileAuthState(userDir);
-    const sock = makeWASocket({
-      auth: state,
-      printQRInTerminal: false,
-      defaultQueryTimeoutMs: 60000       // <<< bump timeout to 60s
-    });
-    sockets[userId] = { sock, saveCreds };
-    sock.ev.on('creds.update', saveCreds);
+  // Always delete old creds so we force a QR on initial /start
+  const userDir = path.join(SESSIONS_DIR, userId);
+  if (fs.existsSync(userDir)) {
+    fs.rmSync(userDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(userDir, { recursive: true });
 
-    let responded = false;
-    sock.ev.on('connection.update', async update => {
-      console.log('connection.update →', update);
-      if (responded) return;
+  // Load auth state
+  const { state, saveCreds } = await useMultiFileAuthState(userDir);
 
-      if (update.qr) {
-        responded = true;
-        const svg = await QRCode.toString(update.qr, { type: 'svg', margin: 1 });
-        return res.json({ qr: Buffer.from(svg).toString('base64') });
+  // Create the socket
+  const sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false,
+    defaultQueryTimeoutMs: 60000,  // give USync up to 60s
+  });
+  sockets[userId] = { sock, saveCreds };
+  sock.ev.on('creds.update', saveCreds);
+
+  let responded = false;
+  sock.ev.on('connection.update', async update => {
+    console.log('connection.update →', update);
+
+    // 1) Handle QR emission
+    if (!responded && update.qr && res) {
+      responded = true;
+      const svg = await QRCode.toString(update.qr, { type: 'svg', margin: 1 });
+      const b64 = Buffer.from(svg).toString('base64');
+      return res.json({ qr: b64 });
+    }
+
+    // 2) Handle successful open
+    if (!responded && update.connection === 'open' && res) {
+      responded = true;
+      saveCreds();
+      return res.json({ success: true });
+    }
+
+    // 3) Handle unexpected close → reconnect
+    if (update.connection === 'close') {
+      const err = update.lastDisconnect?.error;
+      const code = err?.output?.statusCode;
+      const loggedOut = code === DisconnectReason.loggedOut;
+      console.log(`Connection closed for ${userId}:`, err, '– loggedOut?', loggedOut);
+      if (!loggedOut) {
+        console.log(`Reconnecting WhatsApp for ${userId}...`);
+        // No HTTP response here, just restart the socket
+        await initSession(userId, null);
       }
+    }
+  });
 
-      if (update.connection === 'open') {
-        responded = true;
-        saveCreds();
-        return res.json({ success: true });
-      }
-    });
-
+  // If this was the initial /start call, enforce a 15s timeout
+  if (res) {
     setTimeout(() => {
       if (!responded && !res.headersSent) {
         res.status(504).json({ error: 'Timeout generating QR; please try again.' });
       }
     }, 15000);
-
-  } catch (err) {
-    console.error('Init session error', userId, err);
-    if (!res.headersSent) res.status(500).json({ error: 'Server error initializing session' });
   }
+}
+
+// HTTP endpoint to kick off (or re-kick) a session
+app.get('/start/:userId', (req, res) => {
+  initSession(req.params.userId, res).catch(err => {
+    console.error('Init session error', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Server error initializing session' });
+  });
 });
 
-// Manifestation save + immediate WhatsApp confirmation
+// Save manifestations + immediate WhatsApp confirmation
 app.post('/manifestations', async (req, res) => {
   const { userId, items } = req.body;
   if (!userId || !Array.isArray(items)) {
@@ -75,55 +109,47 @@ app.post('/manifestations', async (req, res) => {
   }
 
   try {
-    fs.writeFileSync(
-      path.join(DATA_DIR, `${userId}.json`),
-      JSON.stringify(items, null, 2)
-    );
+    fs.writeFileSync(path.join(DATA_DIR, `${userId}.json`), JSON.stringify(items, null, 2));
     res.json({ success: true });
 
+    // Send confirmation if the socket is open
     const session = sockets[userId];
     if (session) {
-      const { sock, saveCreds } = session;
       try {
-        await sock.sendMessage(`${userId}@s.whatsapp.net`, {
+        await session.sock.sendMessage(`${userId}@s.whatsapp.net`, {
           text: '✅ Your manifestations have been registered!'
         });
-        saveCreds();
+        session.saveCreds();
       } catch (sendErr) {
-        console.error('❌ Confirmation send failed:', sendErr);
-        // we swallow this—no crash
+        console.error('Confirmation send failed (socket closed?)', sendErr);
       }
     }
   } catch (err) {
-    console.error('❌ Error in /manifestations:', err);
+    console.error('Error saving manifestations', err);
     if (!res.headersSent) res.status(500).json({ error: 'Server error saving manifestations' });
   }
 });
 
-// Daily scheduler at 09:00
+// Daily manifest push at 09:00
 cron.schedule('0 9 * * *', () => {
-  const users = fs.readdirSync(SESSIONS_DIR);
-  users.forEach(async userId => {
+  for (const userId of fs.readdirSync(SESSIONS_DIR)) {
     const session = sockets[userId];
-    if (!session) return;
-
-    const { sock, saveCreds } = session;
+    if (!session) continue;
     try {
-      const dataFile = path.join(DATA_DIR, `${userId}.json`);
-      if (!fs.existsSync(dataFile)) return;
-      const items = JSON.parse(fs.readFileSync(dataFile));
-      if (!items.length) return;
-
+      const dataPath = path.join(DATA_DIR, `${userId}.json`);
+      if (!fs.existsSync(dataPath)) continue;
+      const items = JSON.parse(fs.readFileSync(dataPath));
+      if (!items.length) continue;
       const pick = items[Math.floor(Math.random() * items.length)];
-      await sock.sendMessage(`${userId}@s.whatsapp.net`, {
+
+      session.sock.sendMessage(`${userId}@s.whatsapp.net`, {
         text: `🪄 Today's Manifestation:\n${pick}\nGo make it happen!`
-      });
-      saveCreds();
+      }).catch(console.error);
+      session.saveCreds();
     } catch (cronErr) {
-      console.error(`❌ Daily send failed for ${userId}:`, cronErr);
-      // swallow
+      console.error(`Daily send failed for ${userId}`, cronErr);
     }
-  });
+  }
 });
 
 // Start server
