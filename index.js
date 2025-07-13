@@ -14,6 +14,18 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- Create a Baileys-compatible logger ---
+const logger = {
+  level: 'silent', // 'trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'
+  child: () => logger,
+  trace: (...args) => console.log('[TRACE]', ...args),
+  debug: (...args) => console.log('[DEBUG]', ...args),
+  info: (...args) => console.log('[INFO]', ...args),
+  warn: (...args) => console.warn('[WARN]', ...args),
+  error: (...args) => console.error('[ERROR]', ...args),
+  fatal: (...args) => console.error('[FATAL]', ...args)
+};
+
 // --- session & socket storage ---
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -312,7 +324,7 @@ async function initSession(id) {
     sock = makeWASocket({ 
       auth: state,
       printQRInTerminal: false,
-      logger: console, // Add logging
+      logger: logger, // Use our compatible logger
       browser: ['Manifest Bot', 'Chrome', '1.0.0'] // Identify as a proper client
     });
     sockets[id] = sock;
