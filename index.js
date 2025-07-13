@@ -8,6 +8,7 @@ import fs from 'fs';
 import QRCode from 'qrcode';
 import pkg from '@whiskeysockets/baileys';
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = pkg;
+import cron from 'node-cron';
 
 const app = express();
 app.use(express.json());
@@ -19,9 +20,10 @@ const DATA_DIR     = path.join(process.cwd(), 'data');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 if (!fs.existsSync(DATA_DIR))     fs.mkdirSync(DATA_DIR,     { recursive: true });
 
-const sockets = {};
+// In-memory sockets per user
+const sockets: Record<string, any> = {};
 
-// Initialize or resume a WhatsApp session, then return the first QR (base64) or success
+// Start or resume WhatsApp session and serve QR
 app.get('/start/:userId', async (req, res) => {
   const userId = req.params.userId;
   try {
@@ -39,7 +41,6 @@ app.get('/start/:userId', async (req, res) => {
       console.log('connection.update →', update);
       if (!responded && update.qr) {
         responded = true;
-        // Generate SVG with qr data
         const svgString = await QRCode.toString(update.qr, { type: 'svg', width: 300 });
         const svgBase64 = Buffer.from(svgString).toString('base64');
         return res.json({ qr: svgBase64 });
@@ -55,7 +56,6 @@ app.get('/start/:userId', async (req, res) => {
       }
     });
 
-    // Fallback timeout
     setTimeout(() => {
       if (!responded && !res.headersSent) res.status(504).json({ error: 'Timeout generating QR; please try again.' });
     }, 15000);
@@ -66,8 +66,8 @@ app.get('/start/:userId', async (req, res) => {
   }
 });
 
-// Helper: reconnect user session
-async function connectUser(userId) {
+// Reconnect helper
+async function connectUser(userId: string) {
   const userDir = path.join(SESSIONS_DIR, userId);
   const { state, saveCreds } = await useMultiFileAuthState(userDir);
   const sock = makeWASocket({ auth: state });
@@ -75,14 +75,45 @@ async function connectUser(userId) {
   sockets[userId] = sock;
 }
 
-// Save manifestation list
+// Manifestations endpoint
 app.post('/manifestations', (req, res) => {
   const { userId, items } = req.body;
-  if (!userId || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid payload' });
-  fs.writeFileSync(path.join(DATA_DIR, `${userId}.json`), JSON.stringify(items, null, 2));
+  if (!userId || !Array.isArray(items)) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+  const filePath = path.join(DATA_DIR, `${userId}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(items, null, 2));
+
+  // Send registration confirmation
+  const sock = sockets[userId];
+  if (sock) {
+    sock.sendMessage(`${userId}@s.whatsapp.net`, { text: '✅ Your manifestations have been registered!' })
+      .catch(err => console.error('Error sending registration confirmation to', userId, err));
+  }
+
   return res.json({ success: true });
 });
 
+// Daily scheduler at 09:00
+cron.schedule('0 9 * * *', async () => {
+  console.log('🔔 Running daily manifest dispatch');
+  for (const userId of fs.readdirSync(SESSIONS_DIR)) {
+    try {
+      const itemsFile = path.join(DATA_DIR, `${userId}.json`);
+      if (!fs.existsSync(itemsFile)) continue;
+      const items = JSON.parse(fs.readFileSync(itemsFile, 'utf8')) as string[];
+      if (items.length === 0) continue;
+      const choice = items[Math.floor(Math.random() * items.length)];
+      const sock = sockets[userId];
+      if (!sock) continue;
+      await sock.sendMessage(`${userId}@s.whatsapp.net`, { text: `🌟 Your daily manifestation:\n${choice}` });
+      console.log(`Sent to ${userId}: ${choice}`);
+    } catch (err) {
+      console.error(`Error sending to ${userId}:`, err);
+    }
+  }
+});
+
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 app.listen(PORT, () => console.log(`⚡️ Bot listening on port ${PORT}`));
