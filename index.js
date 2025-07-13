@@ -1,79 +1,69 @@
 // index.js
-import { webcrypto } from 'crypto'
-globalThis.crypto ??= webcrypto
-
 import express from 'express'
 import path from 'path'
-import { makeWASocket, DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys'
-import qrcode from 'qrcode'
+import fs from 'fs'
+import { webcrypto } from 'crypto'
+import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
+
+globalThis.crypto = webcrypto
+
+const SESSIONS_DIR = path.join(process.cwd(), 'auth_info_baileys')
+// ensure base sessions dir exists
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true })
 
 const app = express()
-app.use(express.json())
-// serve your front-end assets
+
+// serve your static front-end
 app.use(express.static(path.join(process.cwd(), 'public')))
 
-const PORT = process.env.PORT || 3000
-// in-memory map so you can broadcast QR → front-end via SSE/WebSocket/etc.
-const qrStore = {}
-
+// Helper to spin up a new WhatsApp session for a given ID
 async function initSession(id) {
-  const dir = path.join(process.cwd(), 'sessions', id)
+  const dir = path.join(SESSIONS_DIR, id)
+
+  // wipe any old state so Baileys always emits a fresh QR
+  fs.rmSync(dir, { recursive: true, force: true })
+  fs.mkdirSync(dir, { recursive: true })
+
   const { state, saveCreds } = await useMultiFileAuthState(dir)
+  const sock = makeWASocket({ auth: state })
 
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false
+  // once we actually open, send a welcome message
+  sock.ev.once('connection.update', update => {
+    if (update.connection === 'open') {
+      // adjust the JID formatting if needed:
+      const jid = id.includes('@') ? id : `${id}@s.whatsapp.net`
+      sock.sendMessage(jid, { text: '✅ Your manifestation has been registered!' })
+        .catch(console.error)
+    }
   })
 
-  // expose QR for your front-end to fetch
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update
-
-    if (qr) {
-      // generate a data-URL so you can inject directly into <img src="...">
-      qrStore[id] = await qrcode.toDataURL(qr, { margin: 2 })
-    }
-
-    if (connection === 'open') {
-      // send your welcome message
-      await sock.sendMessage(
-        /* your manifest number JID */ `${id}@s.whatsapp.net`,
-        { text: 'Your manifestation has been registered' }
-      )
-    }
-
-    if (connection === 'close') {
-      const code = (lastDisconnect?.error)?.output?.statusCode
-      const loggedOut = code === DisconnectReason.loggedOut
-      if (!loggedOut) {
-        console.log(`reconnecting session ${id}…`)
-        initSession(id)
+  // give back the first QR we get, or reject if it closes
+  return new Promise((resolve, reject) => {
+    sock.ev.on('connection.update', update => {
+      const { qr, connection, lastDisconnect } = update
+      if (qr) {
+        resolve(qr)
       }
-    }
+      if (connection === 'close') {
+        reject(lastDisconnect?.error || new Error('Connection closed'))
+      }
+    })
+    sock.ev.on('creds.update', saveCreds)
   })
-
-  sock.ev.on('creds.update', saveCreds)
-  return sock
 }
 
-// start/refresh a session
 app.get('/start/:id', async (req, res) => {
+  // disable HTTP caching
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+
   try {
-    await initSession(req.params.id)
-    res.json({ ok: true })
+    const qr = await initSession(req.params.id)
+    res.send(qr)
   } catch (e) {
-    console.error('Init session error', e)
-    res.status(500).json({ error: e.message })
+    console.error('Init session error for', req.params.id, e)
+    res.status(500).send(e.message || 'Error generating QR')
   }
 })
 
-// fetch the QR data-URL
-app.get('/qr/:id', (req, res) => {
-  const d = qrStore[req.params.id]
-  if (!d) return res.status(404).send('no QR yet')
-  res.type('application/json').send({ qrDataUrl: d })
-})
-
-app.listen(PORT, () => {
-  console.log(`⚡️ Bot listening on port ${PORT}`)
-})
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => console.log(`⚡️ Bot listening on port ${PORT}`))
