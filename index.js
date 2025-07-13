@@ -65,11 +65,33 @@ function initUserData(id) {
 // Process messages from any event
 async function processMessages(sock, id, messages, eventType) {
   for (const msg of messages) {
-    console.log(`📝 [${id}] Processing message from ${eventType}:`, JSON.stringify(msg, null, 2));
+    // Skip if we've already processed this message
+    const messageId = msg.key?.id;
+    if (messageId && processedMessages.has(messageId)) {
+      console.log(`⏭️ [${id}] Skipping duplicate message: ${messageId}`);
+      continue;
+    }
     
-    // Process messages that have content, regardless of fromMe status
-    // (since this is a personal bot, we want to respond to the owner's messages)
-    if (msg.message) {
+    console.log(`📝 [${id}] Processing message from ${eventType}:`, {
+      id: messageId,
+      fromMe: msg.key?.fromMe,
+      hasMessage: !!msg.message,
+      remoteJid: msg.key?.remoteJid
+    });
+    
+    // IMPORTANT: Only process messages that are NOT from the bot itself
+    // We want to respond to the owner, but not to our own responses
+    if (msg.message && !msg.key?.fromMe) {
+      // Mark message as processed
+      if (messageId) {
+        processedMessages.add(messageId);
+        // Clean up old message IDs (keep only last 100)
+        if (processedMessages.size > 100) {
+          const first = processedMessages.values().next().value;
+          processedMessages.delete(first);
+        }
+      }
+      
       // Extract text from different message types
       let text = '';
       
@@ -91,31 +113,27 @@ async function processMessages(sock, id, messages, eventType) {
       }
       
       console.log(`🔍 [${id}] Extracted text: "${text}"`);
-      console.log(`📋 [${id}] Message keys available:`, Object.keys(msg.message));
-      console.log(`👤 [${id}] Message fromMe: ${msg.key?.fromMe}`);
-      console.log(`📱 [${id}] Message remoteJid: ${msg.key?.remoteJid}`);
       
-      if (text) {
-        // For personal bots, we want to process messages from the owner
-        // Use the original number as the target for responses
-        const targetJid = `${id}@s.whatsapp.net`;
-        console.log(`📩 [${id}] Processing message: "${text}" - responding to: ${targetJid}`);
+      if (text && text.trim().length > 0) {
+        console.log(`📩 [${id}] Processing incoming message: "${text}" from ${msg.key?.remoteJid}`);
         
         handleIncomingMessage(sock, {
-          remoteJid: targetJid, // Always respond to the bot owner
+          remoteJid: msg.key.remoteJid,
           body: text
         });
       } else {
-        console.log(`⚠️ [${id}] No text found in message. Available message types:`, Object.keys(msg.message));
-        console.log(`📄 [${id}] Full message content:`, JSON.stringify(msg.message, null, 2));
+        console.log(`⚠️ [${id}] No text found in message`);
       }
     } else {
-      console.log(`⏭️ [${id}] Skipping message: hasMessage=${!!msg.message}`);
+      console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key?.fromMe}, hasMessage=${!!msg.message}`);
     }
   }
 }
 
 // --- message handling ---
+const processedMessages = new Set(); // Track processed message IDs to prevent duplicates
+const lastProcessedTime = new Map(); // Track last processing time per user
+
 function handleIncomingMessage(sock, message) {
   const { remoteJid, body } = message;
   
@@ -127,6 +145,15 @@ function handleIncomingMessage(sock, message) {
 
   const userId = remoteJid.split('@')[0];
   const text = body.toLowerCase().trim();
+  
+  // Rate limiting: prevent processing multiple messages from same user within 2 seconds
+  const now = Date.now();
+  const lastTime = lastProcessedTime.get(userId) || 0;
+  if (now - lastTime < 2000) {
+    console.log(`⏰ [${userId}] Rate limited - ignoring message (${now - lastTime}ms since last)`);
+    return;
+  }
+  lastProcessedTime.set(userId, now);
   
   console.log(`🔍 [${userId}] Processing message: "${text}"`);
 
