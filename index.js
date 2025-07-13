@@ -67,7 +67,9 @@ async function processMessages(sock, id, messages, eventType) {
   for (const msg of messages) {
     console.log(`📝 [${id}] Processing message from ${eventType}:`, JSON.stringify(msg, null, 2));
     
-    if (!msg.key?.fromMe && msg.message) {
+    // Process messages that have content, regardless of fromMe status
+    // (since this is a personal bot, we want to respond to the owner's messages)
+    if (msg.message) {
       // Extract text from different message types
       let text = '';
       
@@ -90,11 +92,17 @@ async function processMessages(sock, id, messages, eventType) {
       
       console.log(`🔍 [${id}] Extracted text: "${text}"`);
       console.log(`📋 [${id}] Message keys available:`, Object.keys(msg.message));
+      console.log(`👤 [${id}] Message fromMe: ${msg.key?.fromMe}`);
+      console.log(`📱 [${id}] Message remoteJid: ${msg.key?.remoteJid}`);
       
       if (text) {
-        console.log(`📩 [${id}] Processing message: "${text}" from ${msg.key.remoteJid}`);
+        // For personal bots, we want to process messages from the owner
+        // Use the original number as the target for responses
+        const targetJid = `${id}@s.whatsapp.net`;
+        console.log(`📩 [${id}] Processing message: "${text}" - responding to: ${targetJid}`);
+        
         handleIncomingMessage(sock, {
-          remoteJid: msg.key.remoteJid,
+          remoteJid: targetJid, // Always respond to the bot owner
           body: text
         });
       } else {
@@ -102,7 +110,7 @@ async function processMessages(sock, id, messages, eventType) {
         console.log(`📄 [${id}] Full message content:`, JSON.stringify(msg.message, null, 2));
       }
     } else {
-      console.log(`⏭️ [${id}] Skipping message: fromMe=${msg.key?.fromMe}, hasMessage=${!!msg.message}`);
+      console.log(`⏭️ [${id}] Skipping message: hasMessage=${!!msg.message}`);
     }
   }
 }
