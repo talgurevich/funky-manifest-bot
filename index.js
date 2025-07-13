@@ -1,99 +1,108 @@
 // index.js
-const express = require('express');
-const path = require('path');
-const { toDataURL } = require('qrcode');
-const {
-  default: makeWASocket,
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import qrcode from 'qrcode';
+import {
+  makeWASocket,
   DisconnectReason,
   useMultiFileAuthState
-} = require('@whiskeysockets/baileys');
-const { webcrypto } = require('crypto');
+} from '@whiskeysockets/baileys';
 
-// Provide the Web Crypto API to Baileys
-globalThis.crypto = webcrypto;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
 const app = express();
-const port = process.env.PORT || 3000;
-
-// Serve your public/front-end (HTML/CSS/JS) out of ./public
+app.use(express.json());
+// serve front-end from public/
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory sessions store (keyed by phone number)
-const sessions = {};
+// keep one socket per unique ID
+const sockets = new Map();
 
-/**
- * Initialize a WhatsApp session for a given phone number.
- * Generates QR → stores it, handles reconnects, and sends
- * a welcome message once paired.
- */
-async function initSession(phone) {
-  try {
-    const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${phone}`);
-    const sock = makeWASocket({
-      auth: state,
-      printQRInTerminal: false
-    });
-    sessions[phone] = { sock, qr: null };
+// initialize (or re-init) a Baileys connection for a given id
+async function initSession(id) {
+  const authDir = path.join(__dirname, 'sessions', id);
+  const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    // Watch for connection updates
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
+  const sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false
+  });
 
-      // New QR? turn it into a base64 data-URL
-      if (qr) {
-        try {
-          sessions[phone].qr = await toDataURL(qr);
-        } catch (err) {
-          console.error('Error generating QR DataURL:', err);
-        }
+  sockets.set(id, sock);
+
+  sock.ev.on('connection.update', async update => {
+    const { connection, lastDisconnect, qr, isNewLogin } = update;
+
+    // once we get a new login (i.e. QR scanned & phone linked)
+    if (isNewLogin) {
+      const jid = `${id}@s.whatsapp.net`;
+      try {
+        await sock.sendMessage(jid, {
+          text: '✅ Your manifestation has been registered'
+        });
+      } catch (e) {
+        console.error('Error sending welcome message', e);
       }
+    }
 
-      // Once linked, send your user a confirmation
-      if (connection === 'open') {
-        console.log(`✅ WhatsApp session open for ${phone}`);
-        try {
-          await sock.sendMessage(
-            `${phone}@s.whatsapp.net`,
-            { text: 'Your manifestation has been registered' }
-          );
-        } catch (err) {
-          console.error('Error sending welcome message:', err);
-        }
+    // if the socket closed unexpectedly, reconnect
+    if (connection === 'close') {
+      const code = lastDisconnect?.error?.output?.statusCode;
+      if (code !== DisconnectReason.loggedOut) {
+        console.log(`Reconnecting session ${id}...`);
+        sockets.delete(id);
+        await initSession(id);
       }
+    }
+  });
 
-      // If it closed, decide whether to reconnect
-      if (connection === 'close') {
-        const shouldReconnect =
-          (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-        console.log(`⚠️ Connection closed for ${phone}, reconnect?`, shouldReconnect);
-        if (shouldReconnect) initSession(phone);
-      }
-    });
+  // persist credentials on every update
+  sock.ev.on('creds.update', saveCreds);
 
-    // Persist credentials on update
-    sock.ev.on('creds.update', saveCreds);
-  } catch (error) {
-    console.error('Init session error', error);
-  }
+  return sock;
 }
 
-/**
- * Endpoint to kick off QR-generation for a given phone.
- * Returns JSON { qr: dataURL } once available.
- */
-app.get('/start/:phone', async (req, res) => {
-  const phone = req.params.phone;
-  if (!sessions[phone]) {
-    await initSession(phone);
+// endpoint to kick off (or re-use) a session and grab its next QR
+app.get('/start/:id', async (req, res) => {
+  const id = req.params.id;
+  if (!/^\d+$/.test(id)) {
+    return res.status(400).send('Invalid ID');
   }
-  const qr = sessions[phone]?.qr;
-  if (qr) {
-    res.json({ qr });
-  } else {
-    res.status(500).json({ error: 'QR not yet generated, try again in a sec.' });
+
+  try {
+    let sock = sockets.get(id);
+    if (!sock) {
+      sock = await initSession(id);
+    }
+
+    // wait for the very next QR update
+    const { qr } = await new Promise((resolve, reject) => {
+      const handler = up => {
+        if (up.qr) {
+          sock.ev.off('connection.update', handler);
+          resolve(up);
+        }
+      };
+      sock.ev.on('connection.update', handler);
+
+      setTimeout(() => {
+        sock.ev.off('connection.update', handler);
+        reject(new Error('QR timeout'));
+      }, 30_000);
+    });
+
+    // render as base64‐PNG
+    const dataUrl = await qrcode.toDataURL(qr);
+    res.json({ qr: dataUrl });
+  } catch (e) {
+    console.error('Init session error', e);
+    res.status(500).send('Error generating QR; please try again.');
   }
 });
 
-app.listen(port, () => {
-  console.log(`⚡️ Bot listening on port ${port}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`⚡️ Bot listening on port ${PORT}`)
+);
