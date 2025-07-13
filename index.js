@@ -403,6 +403,30 @@ async function initSession(id) {
         console.log(`📮 [${id}] message-receipt.update: count=${messages.length}`);
       });
 
+      // FALLBACK: Listen to raw protocol messages
+      sock.ev.on('CB:message', async (stanza) => {
+        console.log(`🔧 [${id}] Raw CB:message event:`, JSON.stringify(stanza, null, 2));
+        
+        // Try to extract message from raw stanza
+        if (stanza && stanza.attrs && stanza.attrs.from && stanza.attrs.type === 'text') {
+          console.log(`📨 [${id}] Raw message received from protocol level`);
+          
+          // Simulate a message object for processing
+          const mockMessage = {
+            key: {
+              fromMe: false,
+              remoteJid: stanza.attrs.from,
+              id: stanza.attrs.id
+            },
+            message: {
+              conversation: 'HELP DETECTED' // We can't get actual text from protocol level
+            }
+          };
+          
+          await processMessages(sock, id, [mockMessage], 'protocol-fallback');
+        }
+      });
+
       // Also listen for message history sync
       sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest }) => {
         console.log(`📚 [${id}] Message history set: ${messages.length} messages, ${chats.length} chats`);
@@ -420,6 +444,23 @@ async function initSession(id) {
       sock.ev.on('contacts.set', (contacts) => {
         console.log(`👥 [${id}] Contacts set: ${contacts.length} contacts`);
       });
+
+      // ALTERNATIVE: Try listening to the internal message store
+      if (sock.ev.listenerCount) {
+        console.log(`🔍 [${id}] Available events:`, sock.ev.eventNames());
+      }
+
+      // Try listening to all events to see what's available
+      const originalEmit = sock.ev.emit;
+      sock.ev.emit = function(event, ...args) {
+        if (event.includes('message') || event.includes('upsert')) {
+          console.log(`🎯 [${id}] Event emitted: ${event} with ${args.length} args`);
+          if (args.length > 0) {
+            console.log(`📋 [${id}] Event data:`, JSON.stringify(args[0], null, 2));
+          }
+        }
+        return originalEmit.call(this, event, ...args);
+      };
 
       // listen for connection updates
       sock.ev.on('connection.update', async update => {
