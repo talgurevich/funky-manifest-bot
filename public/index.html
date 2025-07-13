@@ -3,7 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Manifest Bot - Your Daily Manifestation Companion</title>
+  <title>Funky Manifest - Your AI-Powered Daily Manifestation Companion</title>
+  
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-12XG9Y79ZH"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-12XG9Y79ZH');
+  </script>
+  
   <style>
     /* ============ Reset & Base ============ */
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -544,6 +554,12 @@
         return;
       }
       
+      // Analytics: Track registration attempt
+      gtag('event', 'registration_start', {
+        'country_code': countryCode,
+        'event_category': 'engagement'
+      });
+      
       // Remove any non-digits and leading zeros
       const cleanNumber = phoneNumber.replace(/\D/g, '').replace(/^0+/, '');
       currentUserId = countryCode.substring(1) + cleanNumber;
@@ -567,9 +583,15 @@
         
         if (data.linked) {
           // Already connected, skip to manifestation
+          gtag('event', 'existing_user_return', {
+            'event_category': 'engagement'
+          });
           updateStep(3);
         } else {
           // Show QR code
+          gtag('event', 'qr_code_generated', {
+            'event_category': 'engagement'
+          });
           document.getElementById('qr-image').src = data.qr;
           document.getElementById('qr-image').style.display = 'block';
           document.getElementById('qr-status').innerHTML = '📱 Scan this QR code with WhatsApp';
@@ -581,6 +603,10 @@
         }
       } catch (error) {
         console.error('❌ Error:', error);
+        gtag('event', 'registration_error', {
+          'event_category': 'error',
+          'error_message': error.message
+        });
         alert('Error connecting. Please try again.');
       } finally {
         document.getElementById('phone-btn-text').textContent = 'Continue';
@@ -597,6 +623,9 @@
           
           if (data.linked) {
             clearInterval(pollInterval);
+            gtag('event', 'whatsapp_connected', {
+              'event_category': 'conversion'
+            });
             document.getElementById('qr-status').innerHTML = '✅ Connected successfully!';
             document.getElementById('qr-status').className = 'qr-status connected';
             
@@ -670,6 +699,14 @@
         });
         
         if (!settingsResponse.ok) throw new Error('Failed to save settings');
+        
+        // Analytics: Track successful setup
+        gtag('event', 'manifestation_setup_complete', {
+          'event_category': 'conversion',
+          'manifestation_length': text.length,
+          'delivery_time': time,
+          'frequency': frequency
+        });
         
         // Show success
         document.getElementById('success-message').style.display = 'block';
